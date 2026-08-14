@@ -327,6 +327,41 @@ void main() {
     await client.close();
   });
 
+  test('access loss downgrades tracked actions until a snapshot recovers',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(42)]);
+    final client = _FakeClient();
+    final published = <Map<String, dynamic>>[];
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+      published: published,
+    );
+    await coordinator.start();
+    published.clear();
+
+    listener.accessStatus = 'denied';
+    await coordinator.reconcile();
+
+    expect(coordinator.isRunning, isTrue);
+    expect(client.releaseActionExecutorCount, 0);
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['isDismissible'], isFalse);
+
+    published.clear();
+    listener.accessStatus = 'allowed';
+    await coordinator.reconcile();
+
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['isDismissible'], isTrue);
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
   test('periodic polling stops after disposal', () async {
     final listener = _FakeWindowsListener();
     final coordinator = await _createCoordinator(
@@ -487,8 +522,12 @@ void main() {
       ..active = []
       ..listError = StateError('transient snapshot failure');
     await coordinator.reconcile();
-    expect(published, isEmpty);
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['notificationId'], 'windows:44');
+    expect(published.single['isDismissible'], isFalse);
 
+    published.clear();
     listener.listError = null;
     await coordinator.reconcile();
     expect(published, hasLength(1));
@@ -519,7 +558,11 @@ void main() {
       },
     ];
     await coordinator.reconcile();
-    expect(published, isEmpty);
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['notificationId'], 'windows:45');
+    expect(published.single['isDismissible'], isFalse);
+    published.clear();
 
     client.emitActionRequest(_actionRequest(notificationId: 'windows:45'));
     await _pumpAsync();
@@ -766,18 +809,25 @@ void main() {
     }
   });
 
-  test('stopped coordinator reports unavailable without native remove',
+  test('stopped coordinator downgrades actions and rejects native remove',
       () async {
     final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
     final client = _FakeClient();
+    final published = <Map<String, dynamic>>[];
     final coordinator = await _createCoordinator(
       listener: listener,
       client: client,
+      published: published,
     );
     await coordinator.start();
+    published.clear();
     listener.accessStatus = 'denied';
     await coordinator.refresh();
 
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['isDismissible'], isFalse);
+    expect(client.releaseActionExecutorCount, 1);
     client.emitActionRequest(_actionRequest());
     await _pumpAsync();
 

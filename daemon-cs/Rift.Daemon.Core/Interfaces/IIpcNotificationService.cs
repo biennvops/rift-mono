@@ -13,6 +13,8 @@ public interface IIpcNotificationService
 
 public interface IIpcNotificationActionExecutorService
 {
+    event EventHandler? ExecutorUnavailable;
+
     bool HasExecutor { get; }
 
     bool TryAcquire(JsonRpc jsonRpc);

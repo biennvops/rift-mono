@@ -36,6 +36,7 @@ class WindowsNotificationSyncCoordinator {
   WindowsNotificationListenerRuntimeStatus? _runtime;
   bool _running = false;
   bool _ownsActionExecutor = false;
+  bool _nativeActionCapabilityAvailable = false;
   bool _hasSuccessfulSnapshot = false;
   bool _pollQueued = false;
   bool _disposed = false;
@@ -79,6 +80,10 @@ class WindowsNotificationSyncCoordinator {
     _connectionSubscription ??= _client.onConnectionChanged.listen((connected) {
       if (!connected) {
         _ownsActionExecutor = false;
+        _nativeActionCapabilityAvailable = false;
+        unawaited(_enqueue(
+          () => _downgradeTrackedCapabilities(publish: false),
+        ));
       }
     });
   }
@@ -141,6 +146,7 @@ class WindowsNotificationSyncCoordinator {
 
     if (!_running) {
       _running = true;
+      _nativeActionCapabilityAvailable = false;
       _pollTimer = Timer.periodic(_pollInterval, (_) => _queuePoll());
     }
 
@@ -151,6 +157,8 @@ class WindowsNotificationSyncCoordinator {
     _pollTimer?.cancel();
     _pollTimer = null;
     _running = false;
+    _nativeActionCapabilityAvailable = false;
+    await _downgradeTrackedCapabilities(publish: _client.isConnected);
     _hasSuccessfulSnapshot = false;
     _tracked.clear();
     _incompleteSnapshotIds.clear();
@@ -160,6 +168,48 @@ class WindowsNotificationSyncCoordinator {
         await _client.releaseNotificationActionExecutor();
       } catch (_) {
         // A disconnected IPC session has already released its executor lease.
+      }
+    }
+  }
+
+  Future<bool> _hasAllowedAccess() async {
+    try {
+      return await _listener.getAccessStatus() == 'allowed';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _markNativeActionCapabilityUnavailable() async {
+    _nativeActionCapabilityAvailable = false;
+    await _downgradeTrackedCapabilities(publish: _client.isConnected);
+  }
+
+  Future<void> _downgradeTrackedCapabilities({required bool publish}) async {
+    final updates = <Map<String, dynamic>>[];
+    for (final entry in _tracked.entries.toList(growable: false)) {
+      if (entry.value['isDismissible'] != true) {
+        continue;
+      }
+      final downgraded = Map<String, dynamic>.from(entry.value)
+        ..['isDismissible'] = false;
+      _tracked[entry.key] = downgraded;
+      updates.add(<String, dynamic>{
+        ...downgraded,
+        'eventType': 'updated',
+      });
+    }
+    if (!publish) {
+      return;
+    }
+    for (final update in updates) {
+      try {
+        await _publish(update);
+      } catch (error) {
+        debugPrint(
+          '[Notification Sync] Failed to publish Windows action capability '
+          'loss: $error',
+        );
       }
     }
   }
@@ -188,13 +238,24 @@ class WindowsNotificationSyncCoordinator {
     if (_disposed || !_running) {
       return;
     }
+    if (!_ownsActionExecutor) {
+      _nativeActionCapabilityAvailable = false;
+      await _downgradeTrackedCapabilities(publish: false);
+      return;
+    }
 
     late final List<Map<String, dynamic>> active;
     try {
+      if (await _listener.getAccessStatus() != 'allowed') {
+        await _markNativeActionCapabilityUnavailable();
+        return;
+      }
       active = await _listener.listActiveNotifications();
     } catch (_) {
+      await _markNativeActionCapabilityUnavailable();
       return;
     }
+    _nativeActionCapabilityAvailable = true;
 
     final reconcileWithDaemon = reconcileDaemonState || !_hasSuccessfulSnapshot;
     var daemonRecords = <String, dynamic>{};
@@ -223,7 +284,15 @@ class WindowsNotificationSyncCoordinator {
         nextIncompleteIds.add(notificationId);
         final previousEvent = previous[notificationId];
         if (previousEvent != null) {
-          next[notificationId] = previousEvent;
+          final retained = Map<String, dynamic>.from(previousEvent)
+            ..['isDismissible'] = false;
+          next[notificationId] = retained;
+          if (previousEvent['isDismissible'] == true) {
+            await _publish(<String, dynamic>{
+              ...retained,
+              'eventType': 'updated',
+            });
+          }
         } else if (daemonRecords.containsKey(notificationId)) {
           next[notificationId] = <String, dynamic>{
             'notificationId': notificationId,
@@ -303,9 +372,14 @@ class WindowsNotificationSyncCoordinator {
       } else if (action != 'dismiss') {
         failureReason = 'PolicyDenied';
         message = 'Windows notification open is not supported.';
-      } else if (_runtime?.supported != true ||
-          _runtime?.hasPackageIdentity != true ||
-          await _listener.getAccessStatus() != 'allowed') {
+      } else if (!_ownsActionExecutor ||
+          !_nativeActionCapabilityAvailable ||
+          _runtime?.supported != true ||
+          _runtime?.hasPackageIdentity != true) {
+        failureReason = 'CapabilityUnavailable';
+        message = 'The Windows notification observer is unavailable.';
+      } else if (!await _hasAllowedAccess()) {
+        await _markNativeActionCapabilityUnavailable();
         failureReason = 'CapabilityUnavailable';
         message = 'The Windows notification observer is unavailable.';
       } else {
@@ -325,7 +399,10 @@ class WindowsNotificationSyncCoordinator {
             if (!success) {
               switch (result.status) {
                 case WindowsNotificationRemovalStatus.notFound:
+                  failureReason = 'CapabilityUnavailable';
+                  break;
                 case WindowsNotificationRemovalStatus.unavailable:
+                  await _markNativeActionCapabilityUnavailable();
                   failureReason = 'CapabilityUnavailable';
                   break;
                 case WindowsNotificationRemovalStatus.error:
@@ -423,7 +500,8 @@ class WindowsNotificationSyncCoordinator {
       'sourcePlatform': 'windows',
       'packageName': packageName,
       'appName': appName,
-      'isDismissible': _running,
+      'isDismissible':
+          _running && _ownsActionExecutor && _nativeActionCapabilityAvailable,
       'isOpenable': false,
       'postedAt': _nonEmptyString(raw['postedAt']) ??
           _nonEmptyString(_tracked[notificationId]?['postedAt']) ??

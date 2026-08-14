@@ -73,6 +73,10 @@ public sealed class NotificationSyncService : INotificationSyncService
         _securityEventLog = securityEventLog;
         _ipcNotificationService = ipcNotificationService;
         _notificationActionExecutorService = ipcNotificationService as IIpcNotificationActionExecutorService;
+        if (_notificationActionExecutorService is not null)
+        {
+            _notificationActionExecutorService.ExecutorUnavailable += OnNotificationActionExecutorUnavailable;
+        }
         _localActionHandler = localActionHandler;
         _policyStore = policyStore;
         _logger = logger ?? NullLogger<NotificationSyncService>.Instance;
@@ -96,7 +100,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             {
                 Notifications = _notifications.Values
                     .Where(notification => !notification.IsRemoved)
-                    .Select(CloneRecord)
+                    .Select(notification => CloneRecord(notification))
                     .ToArray(),
                 ObservedApps = _observedAppsByPackage.Values
                     .OrderBy(app => app.AppName, StringComparer.Ordinal)
@@ -182,20 +186,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             string.Equals(normalizedEventType, "posted", StringComparison.Ordinal)
                 ? "notification.posted"
                 : "notification.updated",
-            new
-            {
-                notificationId = normalizedNotification.NotificationId,
-                sourceDeviceId = normalizedNotification.SourceDeviceId,
-                sourcePlatform = normalizedNotification.SourcePlatform,
-                packageName = normalizedNotification.PackageName,
-                appName = normalizedNotification.AppName,
-                title = normalizedNotification.Title,
-                bodyPreview = normalizedNotification.BodyPreview,
-                postedAt = normalizedNotification.PostedAt,
-                isDismissible = normalizedNotification.IsDismissible,
-                isOpenable = normalizedNotification.IsOpenable,
-                icon = normalizedNotification.Icon
-            },
+            CreateNotificationPayload(normalizedNotification),
             cancellationToken).ConfigureAwait(false);
 
         return new NotifyLocalNotificationEventResult
@@ -757,6 +748,57 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
+    private void OnNotificationActionExecutorUnavailable(object? sender, EventArgs args)
+    {
+        NotificationSyncRecord[] downgraded;
+        var localDeviceId = _identityManager.GetDeviceId();
+        lock (_gate)
+        {
+            var keys = _notifications
+                .Where(entry =>
+                    !entry.Value.IsRemoved &&
+                    string.Equals(entry.Value.SourceDeviceId, localDeviceId, StringComparison.Ordinal) &&
+                    string.Equals(entry.Value.SourcePlatform, "windows", StringComparison.OrdinalIgnoreCase) &&
+                    (entry.Value.IsDismissible || entry.Value.IsOpenable))
+                .Select(entry => entry.Key)
+                .ToArray();
+            downgraded = new NotificationSyncRecord[keys.Length];
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var updated = CloneRecord(
+                    _notifications[keys[index]],
+                    isDismissible: false,
+                    isOpenable: false);
+                _notifications[keys[index]] = updated;
+                downgraded[index] = CloneRecord(updated);
+            }
+        }
+
+        foreach (var notification in downgraded)
+        {
+            _ = PublishExecutorCapabilityDowngradeAsync(notification);
+        }
+    }
+
+    private async Task PublishExecutorCapabilityDowngradeAsync(NotificationSyncRecord notification)
+    {
+        try
+        {
+            await NotifyIpcAsync("rift.onNotificationUpdated", notification).ConfigureAwait(false);
+            await BroadcastNotificationAsync(
+                "notification.updated",
+                CreateNotificationPayload(notification),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish notification action capability loss for {NotificationId}.",
+                notification.NotificationId);
+        }
+    }
+
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
     {
         if (args.IsOnline)
@@ -933,6 +975,21 @@ public sealed class NotificationSyncService : INotificationSyncService
 
     private static string GetPendingActionKey(string sourceDeviceId, string notificationId, string action) =>
         $"{sourceDeviceId}\n{notificationId}\n{action}";
+
+    private static object CreateNotificationPayload(NotificationSyncRecord notification) => new
+    {
+        notificationId = notification.NotificationId,
+        sourceDeviceId = notification.SourceDeviceId,
+        sourcePlatform = notification.SourcePlatform,
+        packageName = notification.PackageName,
+        appName = notification.AppName,
+        title = notification.Title,
+        bodyPreview = notification.BodyPreview,
+        postedAt = notification.PostedAt,
+        isDismissible = notification.IsDismissible,
+        isOpenable = notification.IsOpenable,
+        icon = notification.Icon
+    };
 
     private object CreateEnvelope(string type, object payload) => new
     {
@@ -1175,7 +1232,10 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
-    private static NotificationSyncRecord CloneRecord(NotificationSyncRecord notification)
+    private static NotificationSyncRecord CloneRecord(
+        NotificationSyncRecord notification,
+        bool? isDismissible = null,
+        bool? isOpenable = null)
     {
         return new NotificationSyncRecord
         {
@@ -1187,8 +1247,8 @@ public sealed class NotificationSyncService : INotificationSyncService
             Title = notification.Title,
             BodyPreview = notification.BodyPreview,
             PostedAt = notification.PostedAt,
-            IsDismissible = notification.IsDismissible,
-            IsOpenable = notification.IsOpenable,
+            IsDismissible = isDismissible ?? notification.IsDismissible,
+            IsOpenable = isOpenable ?? notification.IsOpenable,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
             Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)

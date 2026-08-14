@@ -11,12 +11,15 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
     private int _nextClientId;
     private int? _notificationActionExecutorClientId;
 
+    public event EventHandler? ExecutorUnavailable;
+
     public bool HasClients => !_clients.IsEmpty;
 
     public bool HasExecutor
     {
         get
         {
+            var executorUnavailable = false;
             lock (_gate)
             {
                 if (_notificationActionExecutorClientId is not int clientId)
@@ -30,8 +33,14 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
                 }
 
                 _notificationActionExecutorClientId = null;
-                return false;
+                executorUnavailable = true;
             }
+
+            if (executorUnavailable)
+            {
+                ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+            }
+            return false;
         }
     }
 
@@ -80,8 +89,10 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
             }
 
             _notificationActionExecutorClientId = null;
-            return true;
         }
+
+        ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     public async Task NotifyAsync(string method, object parameters, CancellationToken cancellationToken = default)
@@ -113,6 +124,7 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
         cancellationToken.ThrowIfCancellationRequested();
 
         KeyValuePair<int, JsonRpc> executor;
+        var executorUnavailable = false;
         lock (_gate)
         {
             if (_notificationActionExecutorClientId is not int clientId)
@@ -123,10 +135,19 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
             if (!_clients.TryGetValue(clientId, out var jsonRpc))
             {
                 _notificationActionExecutorClientId = null;
-                return false;
+                executorUnavailable = true;
+                executor = default;
             }
+            else
+            {
+                executor = new KeyValuePair<int, JsonRpc>(clientId, jsonRpc);
+            }
+        }
 
-            executor = new KeyValuePair<int, JsonRpc>(clientId, jsonRpc);
+        if (executorUnavailable)
+        {
+            ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+            return false;
         }
 
         try
@@ -156,13 +177,20 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
 
     private void UnregisterClient(int clientId)
     {
+        var executorUnavailable = false;
         lock (_gate)
         {
             _clients.TryRemove(clientId, out _);
             if (_notificationActionExecutorClientId == clientId)
             {
                 _notificationActionExecutorClientId = null;
+                executorUnavailable = true;
             }
+        }
+
+        if (executorUnavailable)
+        {
+            ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
         }
     }
 

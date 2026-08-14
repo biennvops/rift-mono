@@ -97,6 +97,37 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecutorLoss_DowngradesLocalWindowsActionCapabilities()
+    {
+        var localDeviceId = _identityManager.GetDeviceId();
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            CreateNotification(
+                "windows:42",
+                sourceDeviceId: localDeviceId,
+                sourcePlatform: "windows",
+                isDismissible: true),
+            null,
+            CancellationToken.None);
+        _ipcNotificationService.Events.Clear();
+        _transport.Payloads.Clear();
+
+        _ipcNotificationService.LoseExecutor();
+
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+        var notification = Assert.Single(listed.Notifications);
+        Assert.False(notification.IsDismissible);
+        Assert.False(notification.IsOpenable);
+        var ipcUpdate = Assert.IsType<NotificationSyncRecord>(
+            Assert.Single(_ipcNotificationService.Events, evt => evt.Method == "rift.onNotificationUpdated").Payload);
+        Assert.False(ipcUpdate.IsDismissible);
+        var peerUpdate = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.updated").Payload;
+        Assert.False(peerUpdate.GetProperty("isDismissible").GetBoolean());
+    }
+
+    [Fact]
     public async Task MalformedNotificationIcon_IsDroppedWithoutDroppingNotification()
     {
         var icon = CreateIcon();
@@ -1100,12 +1131,14 @@ public sealed class NotificationSyncServiceTests : IDisposable
         bool isDismissible = true,
         bool isOpenable = false,
         string sourceDeviceId = "rift-peer",
+        string? sourcePlatform = null,
         IReadOnlyDictionary<string, object?>? icon = null)
     {
         return new NotificationSyncRecord
         {
             NotificationId = notificationId,
             SourceDeviceId = sourceDeviceId,
+            SourcePlatform = sourcePlatform,
             PackageName = "com.example.chat",
             AppName = "Example Chat",
             Title = title,
@@ -1258,6 +1291,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
         public bool HasExecutor => HasClients;
         public List<(string Method, object Payload)> Events { get; } = [];
 
+        public event EventHandler? ExecutorUnavailable;
+
         public IDisposable RegisterClient(JsonRpc jsonRpc) => NullDisposable.Instance;
 
         public bool TryAcquire(JsonRpc jsonRpc) => HasClients;
@@ -1282,6 +1317,12 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
             Events.Add((method, parameters));
             return Task.FromResult(true);
+        }
+
+        public void LoseExecutor()
+        {
+            HasClients = false;
+            ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
         }
 
         private sealed class NullDisposable : IDisposable
