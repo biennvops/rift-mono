@@ -593,9 +593,15 @@ def _git_path_pattern_matches(path: str, pattern: str) -> bool:
         if pattern_index == len(pattern_parts):
             result = path_index == len(path_parts)
         elif pattern_parts[pattern_index] == "**":
-            result = match(path_index, pattern_index + 1) or (
-                path_index < len(path_parts) and match(path_index + 1, pattern_index)
-            )
+            if pattern_index == len(pattern_parts) - 1 and pattern_index > 0:
+                result = path_index < len(path_parts) and (
+                    match(path_index + 1, pattern_index + 1)
+                    or match(path_index + 1, pattern_index)
+                )
+            else:
+                result = match(path_index, pattern_index + 1) or (
+                    path_index < len(path_parts) and match(path_index + 1, pattern_index)
+                )
         else:
             result = (
                 path_index < len(path_parts)

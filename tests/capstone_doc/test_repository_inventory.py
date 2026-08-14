@@ -151,6 +151,18 @@ def test_plain_gitignore_supports_double_star_path_patterns(tmp_path: Path) -> N
     assert "foo/a/b/keep.py" in paths
 
 
+def test_plain_gitignore_trailing_double_star_allows_reinclusion(tmp_path: Path) -> None:
+    _write(tmp_path / ".gitignore", "abc/**\n!abc/keep.txt\n")
+    _write(tmp_path / "abc" / "keep.txt", "def keep(): pass\n")
+    _write(tmp_path / "abc" / "drop.txt", "def drop(): pass\n")
+
+    paths, source = RepositoryInventory()._repository_paths(tmp_path)
+
+    assert source == "filesystem"
+    assert "abc/keep.txt" in paths
+    assert "abc/drop.txt" not in paths
+
+
 def test_git_metadata_and_gitignore_semantics_are_captured(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.invalid"], check=True)
