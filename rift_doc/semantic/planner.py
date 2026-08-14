@@ -238,6 +238,7 @@ class SemanticReviewPlanner:
         raw_rule = raw_rule or {
             "id": f"SEM-{finding.rule_id}",
             "task_type": task_type.value,
+            "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
         }
         reference = finding_reference(finding)
         evidence_refs = [f"finding:{reference}"]
@@ -257,6 +258,18 @@ class SemanticReviewPlanner:
                 "trigger_rule_id": finding.rule_id,
                 "source_domain": finding.report,
                 "source_section": finding.section,
+                "source_entity_id": source.get("entity_id") if source else None,
+                "source_entity_name": source.get("canonical_name") if source else None,
+                "target_entity_ids": [
+                    item.get("entity_id")
+                    for item in finding.candidate_entities
+                    if isinstance(item, dict) and item.get("entity_id")
+                ],
+                "target_entity_names": [
+                    item.get("canonical_name")
+                    for item in finding.candidate_entities
+                    if isinstance(item, dict) and item.get("canonical_name")
+                ],
                 "target_domain": finding.target_domain,
                 "requirement": finding.metadata.get("requirement", "MUST"),
                 "requires_visual": finding.rule_id.endswith(".semantic")

@@ -24,6 +24,9 @@ rift-doc = "rift_doc.cli:main"
 [tool.setuptools.packages.find]
 include = ["rift_doc*"]
 
+[tool.setuptools.package-data]
+rift_doc = ["prompts/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests/capstone_doc"]
 pythonpath = ["."]
