@@ -7,6 +7,7 @@ import 'ipc_transport.dart';
 
 class JsonRpcRiftClient {
   final IpcTransport _transport;
+  final json_rpc.Peer Function(StreamChannel<String>) _peerFactory;
   final _log = Logger('JsonRpcRiftClient');
 
   json_rpc.Peer? _client;
@@ -15,7 +16,11 @@ class JsonRpcRiftClient {
   final Map<String, Future<dynamic>> _pendingEndpointPairings = {};
   bool? _supportsSendQueue;
 
-  JsonRpcRiftClient(this._transport);
+  JsonRpcRiftClient(
+    this._transport, {
+    @visibleForTesting
+    json_rpc.Peer Function(StreamChannel<String>)? peerFactory,
+  }) : _peerFactory = peerFactory ?? json_rpc.Peer.new;
 
   bool get isConnected => _isConnected;
 
@@ -472,6 +477,9 @@ class JsonRpcRiftClient {
     StreamController<Map<String, dynamic>> controller, {
     required List<String> requiredStringKeys,
   }) {
+    if (_disposed || controller.isClosed) {
+      return;
+    }
     if (payload == null) {
       _log.warning('$method notification ignored: payload is not an object');
       return;
@@ -496,17 +504,36 @@ class JsonRpcRiftClient {
     // daemon upgrade (or a mid-session feature enablement) can be
     // re-detected on the next supportsSendQueue() call.
     _supportsSendQueue = null;
-    _connectionChangedController.add(isConnected);
+    if (!_connectionChangedController.isClosed) {
+      _connectionChangedController.add(isConnected);
+    }
   }
 
   Future<void> connect() async {
+    if (_disposed) {
+      throw StateError('JsonRpcRiftClient has been disposed');
+    }
+    final disconnecting = _disconnectFuture;
+    if (disconnecting != null) {
+      await disconnecting;
+    }
+    if (_disposed) {
+      throw StateError('JsonRpcRiftClient has been disposed');
+    }
+    _intentionalDisconnect = false;
     if (_isConnected) return;
     final pending = _connectFuture;
     if (pending != null) {
       return pending;
     }
+    if (_reconnectTimer != null) {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _isReconnecting = false;
+    }
 
-    final future = _connectImpl();
+    final epoch = ++_connectionEpoch;
+    final future = _connectImpl(epoch);
     _connectFuture = future;
     try {
       await future;
@@ -517,35 +544,45 @@ class JsonRpcRiftClient {
     }
   }
 
-  Future<void> _connectImpl() async {
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
-    _isReconnecting = false;
+  Future<void> _connectImpl(int epoch) async {
+    final disconnecting = _transportDisconnectFuture;
+    if (disconnecting != null) {
+      await disconnecting;
+    }
+    if (!_canInstallConnection(epoch)) {
+      return;
+    }
 
-    _log.info('Connecting to daemon...');
+    _log.info('Connecting to daemon (epoch=$epoch)...');
     try {
       final channel = await _transport.connect();
+      if (!_canInstallConnection(epoch)) {
+        if (!_intentionalDisconnect && !_disposed) {
+          await _disconnectTransport();
+        }
+        return;
+      }
 
       // Wrap channel to log raw payload (Risk Mitigation: behavior mismatch)
-      _outController = StreamController<String>(sync: true);
-      _outController!.stream.listen((event) {
+      final outController = StreamController<String>(sync: true);
+      outController.stream.listen((event) {
         _log.fine('SEND: $event');
         channel.sink.add(event);
-      },
-          onDone: () => channel.sink.close(),
-          onError: (e) => channel.sink.addError(e));
+      }, onDone: () => channel.sink.close(), onError: channel.sink.addError);
 
       final loggingChannel = StreamChannel<String>(
         channel.stream.map((event) {
           _log.fine('RECV: $event');
           return event;
         }),
-        _outController!.sink,
+        outController.sink,
       );
 
-      _client = json_rpc.Peer(loggingChannel);
+      final peer = _peerFactory(loggingChannel);
+      _outController = outController;
+      _client = peer;
 
-      _client!.registerMethod('rift.onPeerDiscovered',
+      peer.registerMethod('rift.onPeerDiscovered',
           (json_rpc.Parameters params) {
         // Spec: { deviceId?, instanceId, address, port, txtRecord }. We require
         // instanceId to track peers across discovery lifecycle.
@@ -556,7 +593,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['instanceId'],
         );
       });
-      _client!.registerMethod('rift.onPeerLost', (json_rpc.Parameters params) {
+      peer.registerMethod('rift.onPeerLost', (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onPeerLost',
           _asMap(params),
@@ -564,8 +601,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['instanceId'],
         );
       });
-      _client!.registerMethod('rift.onTrustChanged',
-          (json_rpc.Parameters params) {
+      peer.registerMethod('rift.onTrustChanged', (json_rpc.Parameters params) {
         // Spec: { deviceId, previousState, newState, reason? }
         _emitIfValid(
           'rift.onTrustChanged',
@@ -574,7 +610,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'newState'],
         );
       });
-      _client!.registerMethod('rift.onPairingRequest',
+      peer.registerMethod('rift.onPairingRequest',
           (json_rpc.Parameters params) {
         // Spec: { deviceId, fingerprint, displayName?, expiresInMs }
         _emitIfValid(
@@ -584,7 +620,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'fingerprint'],
         );
       });
-      _client!.registerMethod('rift.onPairingComplete',
+      peer.registerMethod('rift.onPairingComplete',
           (json_rpc.Parameters params) {
         // Spec: { deviceId, fingerprint, persistedAt }
         _emitIfValid(
@@ -594,8 +630,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'fingerprint'],
         );
       });
-      _client!.registerMethod('rift.onSecurityEvent',
-          (json_rpc.Parameters params) {
+      peer.registerMethod('rift.onSecurityEvent', (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onSecurityEvent',
           _asMap(params),
@@ -603,7 +638,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['eventId', 'eventType', 'severity'],
         );
       });
-      _client!.registerMethod('rift.onClipboardOffer',
+      peer.registerMethod('rift.onClipboardOffer',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onClipboardOffer',
@@ -617,7 +652,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onClipboardExpired',
+      peer.registerMethod('rift.onClipboardExpired',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onClipboardExpired',
@@ -626,7 +661,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['offerId'],
         );
       });
-      _client!.registerMethod('rift.onNotificationPosted',
+      peer.registerMethod('rift.onNotificationPosted',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onNotificationPosted',
@@ -641,7 +676,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onNotificationUpdated',
+      peer.registerMethod('rift.onNotificationUpdated',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onNotificationUpdated',
@@ -656,7 +691,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onNotificationRemoved',
+      peer.registerMethod('rift.onNotificationRemoved',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onNotificationRemoved',
@@ -665,7 +700,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['notificationId', 'sourceDeviceId'],
         );
       });
-      _client!.registerMethod('rift.onNotificationActionRequest',
+      peer.registerMethod('rift.onNotificationActionRequest',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onNotificationActionRequest',
@@ -680,7 +715,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onNotificationActionResult',
+      peer.registerMethod('rift.onNotificationActionResult',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onNotificationActionResult',
@@ -695,7 +730,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onDeviceStatusUpdated',
+      peer.registerMethod('rift.onDeviceStatusUpdated',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onDeviceStatusUpdated',
@@ -704,7 +739,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['sourceDeviceId', 'observedAt'],
         );
       });
-      _client!.registerMethod('rift.onMediaPlaybackPosted',
+      peer.registerMethod('rift.onMediaPlaybackPosted',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onMediaPlaybackPosted',
@@ -720,7 +755,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onMediaPlaybackUpdated',
+      peer.registerMethod('rift.onMediaPlaybackUpdated',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onMediaPlaybackUpdated',
@@ -736,7 +771,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onMediaPlaybackRemoved',
+      peer.registerMethod('rift.onMediaPlaybackRemoved',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onMediaPlaybackRemoved',
@@ -745,7 +780,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['playbackId', 'sourceDeviceId'],
         );
       });
-      _client!.registerMethod('rift.onMediaPlaybackActionResult',
+      peer.registerMethod('rift.onMediaPlaybackActionResult',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onMediaPlaybackActionResult',
@@ -759,7 +794,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onMediaPlaybackActionRequest',
+      peer.registerMethod('rift.onMediaPlaybackActionRequest',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onMediaPlaybackActionRequest',
@@ -774,7 +809,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onFileOffer', (json_rpc.Parameters params) {
+      peer.registerMethod('rift.onFileOffer', (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileOffer',
           _asMap(params),
@@ -788,7 +823,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onFileTransferProgress',
+      peer.registerMethod('rift.onFileTransferProgress',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferProgress',
@@ -803,7 +838,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onFileTransferReadyToCommit',
+      peer.registerMethod('rift.onFileTransferReadyToCommit',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferReadyToCommit',
@@ -821,7 +856,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onFileTransferCompleted',
+      peer.registerMethod('rift.onFileTransferCompleted',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferCompleted',
@@ -835,7 +870,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onFileTransferFailed',
+      peer.registerMethod('rift.onFileTransferFailed',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferFailed',
@@ -850,7 +885,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onOperationTransition',
+      peer.registerMethod('rift.onOperationTransition',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onOperationTransition',
@@ -864,7 +899,7 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod('rift.onSendQueueChanged',
+      peer.registerMethod('rift.onSendQueueChanged',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onSendQueueChanged',
@@ -873,7 +908,7 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['queueItemId'],
         );
       });
-      _client!.registerMethod('rift.onSendQueueItemUpdated',
+      peer.registerMethod('rift.onSendQueueItemUpdated',
           (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onSendQueueItemUpdated',
@@ -882,70 +917,168 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['queueItemId', 'status'],
         );
       });
-      // Start listening to the RPC channel
-      unawaited(_client!.listen().then((_) {
-        _log.warning('RPC Connection closed');
-        unawaited(_handleDisconnect());
-      }).catchError((e) {
-        _log.severe('RPC Connection error: $e');
-        unawaited(_handleDisconnect());
-      }));
+      // Start listening to the RPC channel.
+      unawaited(
+        peer.listen().then<void>(
+          (_) {
+            _log.warning('RPC connection closed (epoch=$epoch)');
+            unawaited(_handlePeerClosed(peer, epoch, outController));
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            _log.severe(
+              'RPC connection error (epoch=$epoch): $error',
+              error,
+              stackTrace,
+            );
+            unawaited(
+              _handlePeerClosed(
+                peer,
+                epoch,
+                outController,
+                error: error,
+              ),
+            );
+          },
+        ),
+      );
 
+      if (!_canInstallConnection(epoch) || !identical(_client, peer)) {
+        await peer.close();
+        await _closeOutputController(outController);
+        return;
+      }
       _setConnectionState(true);
       _reconnectAttempts = 0;
-      _log.info('Connected to daemon successfully');
-    } catch (e) {
-      _log.severe('Failed to connect: $e');
-      _setConnectionState(false);
+      _log.info('Connected to daemon successfully (epoch=$epoch)');
+    } catch (error) {
+      _log.severe('Failed to connect (epoch=$epoch): $error');
+      if (_connectionEpoch == epoch && !_disposed) {
+        _setConnectionState(false);
+      }
       rethrow;
     }
   }
 
   int _reconnectAttempts = 0;
+  int _connectionEpoch = 0;
   Timer? _reconnectTimer;
   Future<void>? _connectFuture;
-
+  Future<void>? _disconnectFuture;
+  Future<void>? _transportDisconnectFuture;
+  Future<void>? _disposeFuture;
   StreamController<String>? _outController;
-
   bool _isReconnecting = false;
+  bool _intentionalDisconnect = false;
+  bool _disposed = false;
 
-  Future<void> _handleDisconnect() async {
-    _setConnectionState(false);
-    _client = null;
+  bool _canInstallConnection(int epoch) =>
+      !_disposed && !_intentionalDisconnect && epoch == _connectionEpoch;
 
-    // Fire and forget closures to prevent hanging in async tests
-    unawaited(_outController?.close());
-    _outController = null;
+  bool _ownsPeer(json_rpc.Peer peer, int epoch) =>
+      epoch == _connectionEpoch && identical(_client, peer);
 
-    try {
-      await _transport.disconnect();
-    } catch (e) {
-      _log.warning('Error during disconnect: $e');
+  Future<void> _handlePeerClosed(
+    json_rpc.Peer peer,
+    int epoch,
+    StreamController<String> outController, {
+    Object? error,
+  }) async {
+    if (!_ownsPeer(peer, epoch)) {
+      _log.fine('Ignoring stale RPC peer completion (epoch=$epoch)');
+      return;
     }
-
-    _scheduleReconnect();
-  }
-
-  void _scheduleReconnect() {
-    if (_isConnected || _isReconnecting) {
+    if (_intentionalDisconnect || _disposed) {
+      _log.fine('Ignoring intentional RPC peer completion (epoch=$epoch)');
       return;
     }
 
-    // Exponential Backoff Reconnect (infinite retries, capped delay)
+    _log.warning(
+      'Current RPC peer ended unexpectedly (epoch=$epoch, '
+      'reason=${error ?? "closed"})',
+    );
+    _client = null;
+    if (identical(_outController, outController)) {
+      _outController = null;
+    }
+    _setConnectionState(false);
+    unawaited(_closeOutputController(outController));
+    await _disconnectTransport();
+
+    if (_disposed ||
+        _intentionalDisconnect ||
+        epoch != _connectionEpoch ||
+        _client != null) {
+      return;
+    }
+    _scheduleReconnect();
+  }
+
+  Future<void> _closeOutputController(
+    StreamController<String>? controller,
+  ) async {
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
+  }
+
+  Future<void> _disconnectTransport() {
+    final pending = _transportDisconnectFuture;
+    if (pending != null) {
+      return pending;
+    }
+    final future = _performTransportDisconnect();
+    _transportDisconnectFuture = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_transportDisconnectFuture, future)) {
+          _transportDisconnectFuture = null;
+        }
+      }),
+    );
+    return future;
+  }
+
+  Future<void> _performTransportDisconnect() async {
+    try {
+      await _transport.disconnect();
+    } catch (error) {
+      _log.warning('Error during transport disconnect: $error');
+    }
+  }
+
+  void _scheduleReconnect() {
+    if (_disposed ||
+        _intentionalDisconnect ||
+        _isConnected ||
+        _isReconnecting) {
+      return;
+    }
+
     _isReconnecting = true;
+    final scheduledEpoch = _connectionEpoch;
     final delaySeconds = (1 << _reconnectAttempts).clamp(1, 5);
     final delay = Duration(seconds: delaySeconds);
 
     _log.info(
-        'Reconnecting in ${delay.inSeconds} seconds (Attempt ${_reconnectAttempts + 1})...');
+      'Reconnecting in ${delay.inSeconds} seconds '
+      '(attempt ${_reconnectAttempts + 1}, epoch=$scheduledEpoch)...',
+    );
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;
+      if (_disposed ||
+          _intentionalDisconnect ||
+          _isConnected ||
+          scheduledEpoch != _connectionEpoch) {
+        _isReconnecting = false;
+        return;
+      }
       _reconnectAttempts++;
-      connect().catchError((e) {
-        _log.severe('Reconnect failed: $e');
+      connect().catchError((Object error) {
+        _log.severe('Reconnect failed: $error');
       }).whenComplete(() {
-        final shouldRetry = !_isConnected;
+        final shouldRetry =
+            !_isConnected && !_disposed && !_intentionalDisconnect;
         _isReconnecting = false;
         if (shouldRetry) {
           _scheduleReconnect();
@@ -954,22 +1087,83 @@ class JsonRpcRiftClient {
     });
   }
 
-  Future<void> disconnect() async {
+  Future<void> disconnect() {
+    if (_disposed) {
+      return _disposeFuture ?? Future<void>.value();
+    }
+    return _disconnectCurrent();
+  }
+
+  Future<void> _disconnectCurrent() {
+    final disconnecting = _disconnectFuture;
+    if (disconnecting != null) {
+      return disconnecting;
+    }
+
+    _intentionalDisconnect = true;
+    _connectionEpoch++;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectAttempts = 0;
-    _setConnectionState(false);
     _isReconnecting = false;
-    _connectFuture = null;
-    await _client?.close();
+
+    final pendingConnect = _connectFuture;
+    final peer = _client;
+    final outController = _outController;
     _client = null;
-    await _outController?.close();
     _outController = null;
-    await _transport.disconnect();
+    _setConnectionState(false);
+
+    final future = _finishDisconnect(
+      peer: peer,
+      outController: outController,
+      pendingConnect: pendingConnect,
+    );
+    _disconnectFuture = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_disconnectFuture, future)) {
+          _disconnectFuture = null;
+        }
+      }),
+    );
+    return future;
   }
 
-  Future<void> dispose() async {
-    await disconnect();
+  Future<void> _finishDisconnect({
+    required json_rpc.Peer? peer,
+    required StreamController<String>? outController,
+    required Future<void>? pendingConnect,
+  }) async {
+    try {
+      await peer?.close();
+    } catch (error) {
+      _log.warning('Error while closing RPC peer: $error');
+    }
+    try {
+      await _closeOutputController(outController);
+    } catch (error) {
+      _log.warning('Error while closing RPC output: $error');
+    }
+    if (pendingConnect != null) {
+      try {
+        await pendingConnect;
+      } catch (_) {
+        // The invalidated connection attempt is already fully torn down.
+      } finally {
+        if (identical(_connectFuture, pendingConnect)) {
+          _connectFuture = null;
+        }
+      }
+    }
+    await _disconnectTransport();
+  }
+
+  Future<void> dispose() => _disposeFuture ??= _dispose();
+
+  Future<void> _dispose() async {
+    _disposed = true;
+    await _disconnectCurrent();
     await _peerDiscoveredController.close();
     await _peerLostController.close();
     await _trustChangedController.close();

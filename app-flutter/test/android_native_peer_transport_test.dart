@@ -95,7 +95,8 @@ class _RecordingNativeTlsApi implements NativeTlsApi {
 
 void main() {
   group('AndroidNativePeerTransport duplicate connection ownership', () {
-    test('pending candidate keeps the pre-authentication frame limit', () async {
+    test('pending candidate keeps the pre-authentication frame limit',
+        () async {
       final tls = _RecordingNativeTlsApi();
       final transport = AndroidNativePeerTransport(
         _FakeIdentityManager(),
@@ -275,6 +276,37 @@ void main() {
       expect(promoted, isFalse);
       expect(tls.closedConnectionIds, [43]);
       expect(tls.writtenConnectionIds, [42]);
+      expect(disconnects, isEmpty);
+      await disconnectSub.cancel();
+      await transport.stopServer();
+    });
+
+    test('connection-scoped teardown preserves a replacement', () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      final disconnects = <String>[];
+      final disconnectSub =
+          transport.onPeerDisconnected.listen(disconnects.add);
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+      );
+      final oldConnection = transport.currentConnectionToken('rift-peer');
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
+
+      transport.disconnectConnection('rift-peer', oldConnection);
+      await Future<void>.delayed(Duration.zero);
+      await transport.sendMessage('rift-peer', Uint8List.fromList([123, 125]));
+
+      expect(tls.closedConnectionIds, [42]);
+      expect(tls.writtenConnectionIds, [43]);
       expect(disconnects, isEmpty);
       await disconnectSub.cancel();
       await transport.stopServer();
