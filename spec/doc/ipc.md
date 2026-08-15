@@ -872,6 +872,10 @@ Submits a locally observed or locally generated media playback event into the da
 
 `posted` / `updated` require `playbackId`, `appId`, `appName`, `playbackState`, `positionMs`, `updatedAt`, and the five `can*` booleans. `removed` requires `playbackId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
 
+Optional `artwork` follows the peer-protocol media artwork schema. Daemons preserve
+its optional `byteSize` and lowercase `sha256` identity metadata in list/get results
+and media playback notifications so presentation clients can reuse decoded artwork.
+
 ### 4.7A Device Status
 
 #### `rift.getPeerDeviceStatus`

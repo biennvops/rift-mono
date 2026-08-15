@@ -15,8 +15,9 @@ const Set<String> _supportedArtworkTypes = {
   'image/gif',
   'image/webp',
 };
+final RegExp _mediaArtworkSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 
-Map<String, String>? _mediaArtworkInput(Object? value) {
+Map<String, Object>? _mediaArtworkInput(Object? value) {
   if (value is! Map) return null;
   final mediaType = value['mediaType']?.toString().toLowerCase();
   final encoded = value['dataBase64'];
@@ -27,16 +28,27 @@ Map<String, String>? _mediaArtworkInput(Object? value) {
       encoded.length > mediaArtworkMaxBase64Characters) {
     return null;
   }
-  return {
+  final input = <String, Object>{
     'mediaType': mediaType,
     'dataBase64': encoded,
   };
+  final suppliedIdentity = value['sha256']?.toString().toLowerCase();
+  final suppliedByteSize = value['byteSize'];
+  if (suppliedIdentity != null &&
+      _mediaArtworkSha256Pattern.hasMatch(suppliedIdentity) &&
+      suppliedByteSize is int &&
+      suppliedByteSize > 0 &&
+      suppliedByteSize <= mediaArtworkMaxRawBytes) {
+    input['sha256'] = suppliedIdentity;
+    input['byteSize'] = suppliedByteSize;
+  }
+  return input;
 }
 
-Map<String, Object>? _decodeMediaArtwork(Map<String, String> input) {
+Map<String, Object>? _decodeMediaArtwork(Map<String, Object> input) {
   final mediaType = input['mediaType'];
   final encoded = input['dataBase64'];
-  if (mediaType == null || encoded == null) return null;
+  if (mediaType is! String || encoded is! String) return null;
 
   Uint8List bytes;
   try {
@@ -109,10 +121,29 @@ class PlaybackArtworkCache {
     }
 
     final existing = _entries[playbackKey];
-    final encoded = input['dataBase64']!;
+    final mediaType = input['mediaType']! as String;
+    final encoded = input['dataBase64']! as String;
+    final sourceIdentity = input['sha256'] as String?;
+    final sourceByteSize = input['byteSize'] as int?;
+    final existingArtwork = existing?.artwork;
+    if (sourceIdentity != null &&
+        sourceByteSize != null &&
+        existingArtwork?.identity == sourceIdentity &&
+        existingArtwork?.bytes.length == sourceByteSize &&
+        existingArtwork?.mediaType == mediaType) {
+      _entries[playbackKey] = _PlaybackArtworkCacheEntry(
+        artwork: existingArtwork,
+      );
+      return Future.value(existingArtwork);
+    }
+
+    final pendingSourceMatches = sourceIdentity != null &&
+        sourceByteSize != null &&
+        existing?.pendingSourceIdentity == sourceIdentity &&
+        existing?.pendingByteSize == sourceByteSize;
     if (existing?.pending != null &&
-        existing!.pendingMediaType == input['mediaType'] &&
-        identical(existing.pendingEncoded, encoded)) {
+        existing!.pendingMediaType == mediaType &&
+        (pendingSourceMatches || identical(existing.pendingEncoded, encoded))) {
       return existing.pending!;
     }
 
@@ -150,7 +181,9 @@ class PlaybackArtworkCache {
     _entries[playbackKey] = _PlaybackArtworkCacheEntry(
       artwork: previousArtwork,
       pendingEncoded: encoded,
-      pendingMediaType: input['mediaType'],
+      pendingMediaType: mediaType,
+      pendingSourceIdentity: sourceIdentity,
+      pendingByteSize: sourceByteSize,
       pending: pending,
       requestToken: requestToken,
     );
@@ -172,6 +205,8 @@ class _PlaybackArtworkCacheEntry {
     required this.artwork,
     this.pendingEncoded,
     this.pendingMediaType,
+    this.pendingSourceIdentity,
+    this.pendingByteSize,
     this.pending,
     this.requestToken,
   });
@@ -179,6 +214,8 @@ class _PlaybackArtworkCacheEntry {
   final MediaArtwork? artwork;
   final String? pendingEncoded;
   final String? pendingMediaType;
+  final String? pendingSourceIdentity;
+  final int? pendingByteSize;
   final Future<MediaArtwork?>? pending;
   final Object? requestToken;
 }

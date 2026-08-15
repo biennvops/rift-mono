@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rift/src/media_playback/artwork_palette.dart';
@@ -22,6 +23,7 @@ Map<String, Object?> artworkPayload(Uint8List bytes) => {
       'mediaType': 'image/png',
       'dataBase64': base64Encode(bytes),
       'byteSize': bytes.length,
+      'sha256': sha256.convert(bytes).toString(),
     };
 
 void main() {
@@ -116,9 +118,25 @@ void main() {
     await accentCache.resolve(repeated);
 
     expect(repeated, same(first));
-    expect(parsedCache.debugParseCount, 2);
+    expect(parsedCache.debugParseCount, 1);
     expect(parsedCache.debugRetainedBase64Characters, 0);
     expect(accentCache.debugExtractionCount, 1);
+  });
+
+  test('does not reuse an unverified artwork identity', () async {
+    final bytes = await imageBytes((canvas) {
+      canvas.drawColor(const Color(0xFFD62828), BlendMode.src);
+    });
+    final payload = artworkPayload(bytes)..['sha256'] = '0' * 64;
+    final cache = PlaybackArtworkCache();
+
+    await cache.resolve('peer:session', payload);
+    await cache.resolve(
+      'peer:session',
+      Map<String, Object?>.from(payload),
+    );
+
+    expect(cache.debugParseCount, 2);
   });
 
   test('accent extraction is cached and bounded', () async {

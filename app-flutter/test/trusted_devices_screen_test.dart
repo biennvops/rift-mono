@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -27,6 +28,7 @@ Future<Map<String, Object?>> _solidArtwork(Color color) async {
     'mediaType': 'image/png',
     'dataBase64': base64Encode(bytes),
     'byteSize': bytes.length,
+    'sha256': sha256.convert(bytes).toString(),
   };
 }
 

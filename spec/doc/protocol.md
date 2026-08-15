@@ -418,11 +418,16 @@ The v1 playback record fields are:
 | `updatedAt`       | Yes      | RFC 3339 UTC string | Audit timestamp for the latest local observation                    |
 
 When `artwork` is present, it contains `dataBase64` with the encoded image bytes and
-`mediaType` with the detected image MIME type. Implementations MAY additionally
-include the source `uri` as diagnostic metadata, but receivers MUST NOT fetch a
-source-device-local URI. Originators MUST omit artwork that is unavailable,
-unsupported, malformed, or larger than 20 MiB before Base64 encoding. Media
-playback sync v1 supports PNG, JPEG, GIF, and WebP artwork.
+`mediaType` with the detected image MIME type. Originators SHOULD also include
+`byteSize` and `sha256`; when either identity field is present, both MUST be present,
+`byteSize` MUST equal the decoded byte count, and `sha256` MUST be the lowercase
+SHA-256 digest of the exact decoded bytes. Receivers MAY use validated
+`(mediaType, byteSize, sha256)` metadata as a presentation-cache identity without
+re-decoding unchanged artwork. Implementations MAY additionally include the source
+`uri` as diagnostic metadata, but receivers MUST NOT fetch a source-device-local
+URI. Originators MUST omit artwork that is unavailable, unsupported, malformed, or
+larger than 20 MiB before Base64 encoding. Media playback sync v1 supports PNG,
+JPEG, GIF, and WebP artwork.
 
 `media.playbackPosted` payload fields: the full playback record above.
 

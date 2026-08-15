@@ -6,6 +6,9 @@ void main() {
     final androidArtwork = <String, dynamic>{
       'mimeType': 'image/png',
       'dataBase64': 'AQID',
+      'byteSize': 3,
+      'sha256':
+          '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
     };
 
     final normalized = normalizeAndroidMediaArtwork(androidArtwork);
@@ -13,6 +16,9 @@ void main() {
     expect(normalized, {
       'mediaType': 'image/png',
       'dataBase64': 'AQID',
+      'byteSize': 3,
+      'sha256':
+          '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
     });
     expect(androidArtwork, containsPair('mimeType', 'image/png'));
   });

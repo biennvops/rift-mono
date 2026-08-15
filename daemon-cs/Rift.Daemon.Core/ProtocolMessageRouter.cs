@@ -667,7 +667,7 @@ public sealed class ProtocolMessageRouter(
         }
 
         var artwork = new Dictionary<string, object?>(StringComparer.Ordinal);
-        foreach (var fieldName in new[] { "dataBase64", "mediaType", "uri" })
+        foreach (var fieldName in new[] { "dataBase64", "mediaType", "uri", "sha256" })
         {
             if (!artworkElement.TryGetProperty(fieldName, out var field))
             {
@@ -680,6 +680,15 @@ public sealed class ProtocolMessageRouter(
             }
 
             artwork[fieldName] = field.GetString();
+        }
+
+        if (artworkElement.TryGetProperty("byteSize", out var byteSizeField))
+        {
+            if (byteSizeField.ValueKind is not JsonValueKind.Number || !byteSizeField.TryGetInt32(out var byteSize))
+            {
+                throw new JsonException("Media artwork field 'byteSize' must be an integer.");
+            }
+            artwork["byteSize"] = byteSize;
         }
 
         return artwork;
