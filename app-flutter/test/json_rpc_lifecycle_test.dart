@@ -9,51 +9,131 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('JsonRpcRiftClient connection lifecycle', () {
-    test('stale peer completion cannot tear down replacement', () {
-      fakeAsync((async) {
-        final transport = _LifecycleTransport();
-        final peers = <_ControlledPeer>[];
-        final client = JsonRpcRiftClient(
-          transport,
-          peerFactory: (_) {
-            final peer = _ControlledPeer();
-            peers.add(peer);
-            return peer;
-          },
-        );
+    test('stale peer completion cannot tear down replacement', () async {
+      final transport = _LifecycleTransport();
+      final peers = <_ControlledPeer>[];
+      final client = JsonRpcRiftClient(
+        transport,
+        peerFactory: (_) {
+          final peer = _ControlledPeer();
+          peers.add(peer);
+          return peer;
+        },
+      );
 
-        client.connect();
-        async.flushMicrotasks();
-        expect(client.isConnected, isTrue);
-        expect(peers, hasLength(1));
+      await client.connect();
+      expect(client.isConnected, isTrue);
+      expect(peers, hasLength(1));
 
-        client.disconnect();
-        async.flushMicrotasks();
-        client.connect();
-        async.flushMicrotasks();
-        expect(client.isConnected, isTrue);
-        expect(transport.connectionAttempts, 2);
-        expect(peers, hasLength(2));
-        final disconnectsBeforeStaleCompletion = transport.disconnectCalls;
+      await client.disconnect();
+      await client.connect();
+      expect(client.isConnected, isTrue);
+      expect(transport.connectionAttempts, 2);
+      expect(peers, hasLength(2));
+      final disconnectsBeforeStaleCompletion = transport.disconnectCalls;
 
-        peers.first.completeListen();
-        async.flushMicrotasks();
-        async.elapse(const Duration(seconds: 10));
-        async.flushMicrotasks();
+      peers.first.completeListen();
+      await Future<void>.delayed(Duration.zero);
 
-        expect(client.isConnected, isTrue);
-        expect(transport.isConnected, isTrue);
-        expect(transport.disconnectCalls, disconnectsBeforeStaleCompletion);
-        expect(transport.connectionAttempts, 2);
-        expect(peers.last.closeCalls, 0);
+      expect(client.isConnected, isTrue);
+      expect(transport.isConnected, isTrue);
+      expect(transport.disconnectCalls, disconnectsBeforeStaleCompletion);
+      expect(transport.connectionAttempts, 2);
+      expect(peers.last.closeCalls, 0);
 
-        client.dispose();
-        async.flushMicrotasks();
-        peers.last.completeListen();
-        async.flushMicrotasks();
-        transport.dispose();
-        async.flushMicrotasks();
-      });
+      await client.dispose();
+      peers.last.completeListen();
+      await transport.dispose();
+    });
+
+    test('connect waits for peer close before replacing the transport',
+        () async {
+      final closeGate = Completer<void>();
+      final transport = _LifecycleTransport();
+      final peers = <_ControlledPeer>[];
+      final client = JsonRpcRiftClient(
+        transport,
+        peerFactory: (_) {
+          final peer = _ControlledPeer(
+            closeGate: peers.isEmpty ? closeGate.future : null,
+          );
+          peers.add(peer);
+          return peer;
+        },
+      );
+
+      await client.connect();
+      final disconnect = client.disconnect();
+      expect(peers.single.closeCalls, 1);
+
+      final reconnect = client.connect();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transport.connectionAttempts, 1);
+      expect(transport.disconnectCalls, 0);
+      expect(client.isConnected, isFalse);
+
+      closeGate.complete();
+      await Future.wait([disconnect, reconnect]);
+
+      expect(transport.disconnectCalls, 1);
+      expect(transport.connectionAttempts, 2);
+      expect(transport.isConnected, isTrue);
+      expect(client.isConnected, isTrue);
+      expect(peers, hasLength(2));
+
+      final disconnectsBeforeStaleCompletion = transport.disconnectCalls;
+      peers.first.completeListen();
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.disconnectCalls, disconnectsBeforeStaleCompletion);
+      expect(client.isConnected, isTrue);
+
+      await client.dispose();
+      for (final peer in peers) {
+        peer.completeListen();
+      }
+      await transport.dispose();
+    });
+
+    test('connect starts a new attempt after invalidated connect finishes',
+        () async {
+      final connectGate = Completer<void>();
+      final transport = _LifecycleTransport()
+        ..blockNextConnect(connectGate.future);
+      final peers = <_ControlledPeer>[];
+      final client = JsonRpcRiftClient(
+        transport,
+        peerFactory: (_) {
+          final peer = _ControlledPeer();
+          peers.add(peer);
+          return peer;
+        },
+      );
+
+      final initialConnect = client.connect();
+      expect(transport.connectionAttempts, 1);
+
+      final disconnect = client.disconnect();
+      final reconnect = client.connect();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transport.connectionAttempts, 1);
+      expect(client.isConnected, isFalse);
+
+      connectGate.complete();
+      await Future.wait([initialConnect, disconnect, reconnect]);
+
+      expect(transport.disconnectCalls, 1);
+      expect(transport.connectionAttempts, 2);
+      expect(transport.isConnected, isTrue);
+      expect(client.isConnected, isTrue);
+      expect(peers, hasLength(1));
+
+      await client.dispose();
+      for (final peer in peers) {
+        peer.completeListen();
+      }
+      await transport.dispose();
     });
 
     test('manual disconnect never schedules reconnect', () {
@@ -157,13 +237,23 @@ void main() {
 class _LifecycleTransport implements IpcTransport {
   final List<_TransportConnection> _connections = [];
   _TransportConnection? _currentConnection;
+  Future<void>? _nextConnectGate;
   int connectionAttempts = 0;
   int disconnectCalls = 0;
   bool isConnected = false;
 
+  void blockNextConnect(Future<void> gate) {
+    _nextConnectGate = gate;
+  }
+
   @override
   Future<StreamChannel<String>> connect() async {
     connectionAttempts += 1;
+    final connectGate = _nextConnectGate;
+    _nextConnectGate = null;
+    if (connectGate != null) {
+      await connectGate;
+    }
     final connection = _TransportConnection();
     _connections.add(connection);
     _currentConnection = connection;
@@ -206,6 +296,9 @@ class _TransportConnection {
 }
 
 class _ControlledPeer implements json_rpc.Peer {
+  _ControlledPeer({this.closeGate});
+
+  final Future<void>? closeGate;
   final Completer<void> _listenCompleter = Completer<void>();
   bool _isClosed = false;
   int closeCalls = 0;
@@ -223,6 +316,7 @@ class _ControlledPeer implements json_rpc.Peer {
   Future<void> close() async {
     closeCalls += 1;
     _isClosed = true;
+    await closeGate;
   }
 
   @override
