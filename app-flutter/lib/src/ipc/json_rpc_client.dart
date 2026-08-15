@@ -476,6 +476,7 @@ class JsonRpcRiftClient {
     Map<String, dynamic>? payload,
     StreamController<Map<String, dynamic>> controller, {
     required List<String> requiredStringKeys,
+    List<String> requiredBoolKeys = const <String>[],
   }) {
     if (_disposed || controller.isClosed) {
       return;
@@ -486,6 +487,13 @@ class JsonRpcRiftClient {
     }
     for (final k in requiredStringKeys) {
       if (!_hasString(payload, k)) {
+        _log.warning(
+            '$method notification ignored: missing/invalid "$k": $payload');
+        return;
+      }
+    }
+    for (final k in requiredBoolKeys) {
+      if (payload[k] is! bool) {
         _log.warning(
             '$method notification ignored: missing/invalid "$k": $payload');
         return;
@@ -788,10 +796,12 @@ class JsonRpcRiftClient {
           _mediaPlaybackActionResultController,
           requiredStringKeys: const [
             'playbackId',
+            'sourceDeviceId',
             'action',
             'operationId',
             'state',
           ],
+          requiredBoolKeys: const ['success'],
         );
       });
       peer.registerMethod('rift.onMediaPlaybackActionRequest',
