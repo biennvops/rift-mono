@@ -16,6 +16,43 @@ const Set<String> _supportedArtworkTypes = {
   'image/webp',
 };
 
+Map<String, String>? _mediaArtworkInput(Object? value) {
+  if (value is! Map) return null;
+  final mediaType = value['mediaType']?.toString().toLowerCase();
+  final encoded = value['dataBase64'];
+  if (mediaType == null ||
+      !_supportedArtworkTypes.contains(mediaType) ||
+      encoded is! String ||
+      encoded.isEmpty ||
+      encoded.length > mediaArtworkMaxBase64Characters) {
+    return null;
+  }
+  return {
+    'mediaType': mediaType,
+    'dataBase64': encoded,
+  };
+}
+
+Map<String, Object>? _decodeMediaArtwork(Map<String, String> input) {
+  final mediaType = input['mediaType'];
+  final encoded = input['dataBase64'];
+  if (mediaType == null || encoded == null) return null;
+
+  Uint8List bytes;
+  try {
+    bytes = base64Decode(encoded);
+  } catch (_) {
+    return null;
+  }
+  if (bytes.isEmpty || bytes.length > mediaArtworkMaxRawBytes) return null;
+
+  return {
+    'mediaType': mediaType,
+    'bytes': bytes,
+    'identity': sha256.convert(bytes).toString(),
+  };
+}
+
 @immutable
 class MediaArtwork {
   const MediaArtwork({
@@ -29,36 +66,25 @@ class MediaArtwork {
   final String identity;
 
   static MediaArtwork? tryParse(Object? value) {
-    if (value is! Map) return null;
-    final mediaType = value['mediaType']?.toString().toLowerCase();
-    final encoded = value['dataBase64'];
-    if (mediaType == null ||
-        !_supportedArtworkTypes.contains(mediaType) ||
-        encoded is! String ||
-        encoded.isEmpty ||
-        encoded.length > mediaArtworkMaxBase64Characters) {
-      return null;
-    }
-
-    Uint8List bytes;
-    try {
-      bytes = base64Decode(encoded);
-    } catch (_) {
-      return null;
-    }
-    if (bytes.isEmpty || bytes.length > mediaArtworkMaxRawBytes) return null;
-
-    final digest = sha256.convert(bytes).toString();
-    final suppliedDigest = value['sha256']?.toString().toLowerCase();
-    final identity = suppliedDigest != null && suppliedDigest == digest
-        ? suppliedDigest
-        : digest;
-    return MediaArtwork(
-      mediaType: mediaType,
-      bytes: bytes,
-      identity: identity,
-    );
+    final input = _mediaArtworkInput(value);
+    return input == null
+        ? null
+        : _mediaArtworkFromDecoded(_decodeMediaArtwork(input));
   }
+}
+
+MediaArtwork? _mediaArtworkFromDecoded(Map<String, Object>? decoded) {
+  final mediaType = decoded?['mediaType'];
+  final bytes = decoded?['bytes'];
+  final identity = decoded?['identity'];
+  if (mediaType is! String || bytes is! Uint8List || identity is! String) {
+    return null;
+  }
+  return MediaArtwork(
+    mediaType: mediaType,
+    bytes: bytes,
+    identity: identity,
+  );
 }
 
 class PlaybackArtworkCache {
@@ -69,33 +95,66 @@ class PlaybackArtworkCache {
   @visibleForTesting
   int get debugParseCount => _parseCount;
 
-  MediaArtwork? resolve(String playbackKey, Object? value) {
-    if (value is! Map) {
+  @visibleForTesting
+  int get debugRetainedBase64Characters => _entries.values.fold(
+        0,
+        (total, entry) => total + (entry.pendingEncoded?.length ?? 0),
+      );
+
+  Future<MediaArtwork?> resolve(String playbackKey, Object? value) {
+    final input = _mediaArtworkInput(value);
+    if (input == null) {
       _entries.remove(playbackKey);
-      return null;
-    }
-    final mediaType = value['mediaType']?.toString().toLowerCase();
-    final encoded = value['dataBase64'];
-    if (mediaType == null || encoded is! String) {
-      _entries.remove(playbackKey);
-      return null;
+      return Future.value(null);
     }
 
     final existing = _entries[playbackKey];
-    if (existing != null &&
-        existing.mediaType == mediaType &&
-        existing.encoded == encoded) {
-      return existing.artwork;
+    final encoded = input['dataBase64']!;
+    if (existing?.pending != null &&
+        existing!.pendingMediaType == input['mediaType'] &&
+        identical(existing.pendingEncoded, encoded)) {
+      return existing.pending!;
     }
 
+    final requestToken = Object();
+    final previousArtwork = existing?.artwork;
     _parseCount++;
-    final artwork = MediaArtwork.tryParse(value);
+    Future<MediaArtwork?> decodeAndCache() async {
+      Map<String, Object>? decoded;
+      try {
+        decoded = await compute(_decodeMediaArtwork, input);
+      } catch (_) {
+        final current = _entries[playbackKey];
+        if (identical(current?.requestToken, requestToken)) {
+          _entries[playbackKey] = _PlaybackArtworkCacheEntry(
+            artwork: previousArtwork,
+          );
+        }
+        return previousArtwork;
+      }
+
+      final parsed = _mediaArtworkFromDecoded(decoded);
+      final current = _entries[playbackKey];
+      if (!identical(current?.requestToken, requestToken)) return parsed;
+
+      final artwork = parsed != null &&
+              previousArtwork?.identity == parsed.identity &&
+              previousArtwork?.mediaType == parsed.mediaType
+          ? previousArtwork
+          : parsed;
+      _entries[playbackKey] = _PlaybackArtworkCacheEntry(artwork: artwork);
+      return artwork;
+    }
+
+    final pending = decodeAndCache();
     _entries[playbackKey] = _PlaybackArtworkCacheEntry(
-      mediaType: mediaType,
-      encoded: encoded,
-      artwork: artwork,
+      artwork: previousArtwork,
+      pendingEncoded: encoded,
+      pendingMediaType: input['mediaType'],
+      pending: pending,
+      requestToken: requestToken,
     );
-    return artwork;
+    return pending;
   }
 
   void remove(String playbackKey) => _entries.remove(playbackKey);
@@ -110,14 +169,18 @@ class PlaybackArtworkCache {
 
 class _PlaybackArtworkCacheEntry {
   const _PlaybackArtworkCacheEntry({
-    required this.mediaType,
-    required this.encoded,
     required this.artwork,
+    this.pendingEncoded,
+    this.pendingMediaType,
+    this.pending,
+    this.requestToken,
   });
 
-  final String mediaType;
-  final String encoded;
   final MediaArtwork? artwork;
+  final String? pendingEncoded;
+  final String? pendingMediaType;
+  final Future<MediaArtwork?>? pending;
+  final Object? requestToken;
 }
 
 class ArtworkAccentCache {

@@ -93,7 +93,7 @@ void main() {
     );
   });
 
-  test('reuses parsed artwork across repeated playback updates', () async {
+  test('reuses decoded artwork without retaining its Base64 source', () async {
     final bytes = await imageBytes((canvas) {
       canvas.drawColor(const Color(0xFFD62828), BlendMode.src);
     });
@@ -101,16 +101,23 @@ void main() {
     final parsedCache = PlaybackArtworkCache();
     final accentCache = ArtworkAccentCache();
 
-    final first = parsedCache.resolve('peer:session', payload)!;
+    final firstFuture = parsedCache.resolve('peer:session', payload);
+    expect(
+      parsedCache.debugRetainedBase64Characters,
+      (payload['dataBase64'] as String).length,
+    );
+    final first = (await firstFuture)!;
+    expect(parsedCache.debugRetainedBase64Characters, 0);
     await accentCache.resolve(first);
-    final repeated = parsedCache.resolve(
+    final repeated = (await parsedCache.resolve(
       'peer:session',
       Map<String, Object?>.from(payload),
-    )!;
+    ))!;
     await accentCache.resolve(repeated);
 
     expect(repeated, same(first));
-    expect(parsedCache.debugParseCount, 1);
+    expect(parsedCache.debugParseCount, 2);
+    expect(parsedCache.debugRetainedBase64Characters, 0);
     expect(accentCache.debugExtractionCount, 1);
   });
 

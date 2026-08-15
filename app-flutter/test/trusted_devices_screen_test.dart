@@ -30,6 +30,18 @@ Future<Map<String, Object?>> _solidArtwork(Color color) async {
   };
 }
 
+Future<void> _pumpUntil(
+  WidgetTester tester,
+  bool Function() condition,
+) async {
+  for (var attempt = 0; attempt < 20 && !condition(); attempt++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump();
+  }
+}
+
 class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   FakeJsonRpcRiftClient() : super(FakeTransport());
   final _pairingCompleteController =
@@ -1914,10 +1926,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    await _pumpUntil(
+      tester,
+      () => find
+          .byKey(const ValueKey('orbit-peer-media-accented-peer-a'))
+          .evaluate()
+          .isNotEmpty,
     );
-    await tester.pumpAndSettle();
 
     expect(
       find.byKey(const ValueKey('orbit-peer-media-playing-peer-a')),
@@ -2011,10 +2026,13 @@ void main() {
       'artwork': blueArtwork,
     });
     await tester.pumpAndSettle();
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 50)),
-    );
-    await tester.pumpAndSettle();
+    await _pumpUntil(tester, () {
+      final accent =
+          tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
+      if (accent == null) return false;
+      final hue = HSLColor.fromColor(accent).hue;
+      return hue >= 200 && hue <= 250;
+    });
     final blueAccent =
         tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
     expect(blueAccent, isNotNull);

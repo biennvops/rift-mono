@@ -80,6 +80,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   final PlaybackArtworkCache _playbackArtworkCache = PlaybackArtworkCache();
   final Map<String, MediaArtwork> _artworkByPlaybackKey =
       <String, MediaArtwork>{};
+  final Map<String, int> _artworkGenerationByPlaybackKey = <String, int>{};
   final Map<String, Color> _pendingAccentFallbackByPlaybackKey =
       <String, Color>{};
   final ArtworkAccentCache _artworkAccentCache = ArtworkAccentCache();
@@ -203,6 +204,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _playbacksByKey.clear();
           _playbackArtworkCache.clear();
           _artworkByPlaybackKey.clear();
+          _artworkGenerationByPlaybackKey.clear();
           _pendingAccentFallbackByPlaybackKey.clear();
           _peerDeviceStatuses.clear();
           _loadingPeerDeviceStatuses.clear();
@@ -377,41 +379,44 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       final result = await client.listMediaPlayback();
       if (!mounted || !client.isConnected || result is! Map) return;
       final loaded = <String, Map<String, dynamic>>{};
+      final artworkPayloads = <String, Object?>{};
       for (final item in List<dynamic>.from(
         result['playbacks'] ?? const <dynamic>[],
       )) {
         if (item is! Map) continue;
         final playback = Map<String, dynamic>.from(item);
         final key = mediaPlaybackKey(playback);
-        if (key != null) loaded[key] = playback;
+        if (key == null) continue;
+        artworkPayloads[key] = playback.remove('artwork');
+        loaded[key] = playback;
       }
       for (final mutation in _playbackMutationsDuringLoad) {
         final key = mediaPlaybackKey(mutation.playback);
         if (key == null) continue;
+        artworkPayloads.remove(key);
         if (mutation.removed) {
           loaded.remove(key);
         } else {
           loaded[key] = mutation.playback;
         }
       }
-      final loadedArtwork = <String, MediaArtwork>{};
-      for (final entry in loaded.entries) {
-        final artwork =
-            _playbackArtworkCache.resolve(entry.key, entry.value['artwork']);
-        if (artwork != null) loadedArtwork[entry.key] = artwork;
-      }
       _playbackArtworkCache.retainOnly(loaded.keys);
+      _artworkGenerationByPlaybackKey.removeWhere(
+        (key, _) => !loaded.containsKey(key),
+      );
       setState(() {
         _playbacksByKey
           ..clear()
           ..addAll(loaded);
-        _artworkByPlaybackKey
-          ..clear()
-          ..addAll(loadedArtwork);
-        _pendingAccentFallbackByPlaybackKey.clear();
+        _artworkByPlaybackKey.removeWhere(
+          (key, _) => !loaded.containsKey(key),
+        );
+        _pendingAccentFallbackByPlaybackKey.removeWhere(
+          (key, _) => !loaded.containsKey(key),
+        );
       });
-      for (final artwork in loadedArtwork.values) {
-        unawaited(_resolveArtworkAccent(artwork));
+      for (final entry in artworkPayloads.entries) {
+        _startPlaybackArtworkResolution(entry.key, entry.value);
       }
     } catch (_) {
       // Device presentation remains usable when media state is unavailable.
@@ -425,27 +430,67 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final playback = Map<String, dynamic>.from(event);
     final key = mediaPlaybackKey(playback);
     if (key == null || !mounted) return;
+    final artworkPayload = playback.remove('artwork');
     if (_isLoadingPlayback) {
       _playbackMutationsDuringLoad.add((removed: false, playback: playback));
     }
     final sourceDeviceId = playback['sourceDeviceId']?.toString() ?? '';
     final previousDeviceAccent =
         _mediaPlaybackForDevice(sourceDeviceId)?.accentColor;
-    final artwork = _playbackArtworkCache.resolve(key, playback['artwork']);
+    setState(() {
+      _playbacksByKey[key] = playback;
+    });
+    _startPlaybackArtworkResolution(
+      key,
+      artworkPayload,
+      fallbackAccent: previousDeviceAccent,
+    );
+  }
+
+  void _startPlaybackArtworkResolution(
+    String playbackKey,
+    Object? artworkPayload, {
+    Color? fallbackAccent,
+  }) {
+    final generation = (_artworkGenerationByPlaybackKey[playbackKey] ?? 0) + 1;
+    _artworkGenerationByPlaybackKey[playbackKey] = generation;
+    unawaited(
+      _applyPlaybackArtwork(
+        playbackKey,
+        artworkPayload,
+        generation,
+        fallbackAccent,
+      ),
+    );
+  }
+
+  Future<void> _applyPlaybackArtwork(
+    String playbackKey,
+    Object? artworkPayload,
+    int generation,
+    Color? fallbackAccent,
+  ) async {
+    final artwork =
+        await _playbackArtworkCache.resolve(playbackKey, artworkPayload);
+    if (!mounted ||
+        _artworkGenerationByPlaybackKey[playbackKey] != generation ||
+        !_playbacksByKey.containsKey(playbackKey)) {
+      return;
+    }
+
     final resolvedAccent = artwork == null
         ? null
         : _artworkAccentCache.accentFor(artwork.identity);
     setState(() {
-      _playbacksByKey[key] = playback;
       if (artwork == null) {
-        _artworkByPlaybackKey.remove(key);
-        _pendingAccentFallbackByPlaybackKey.remove(key);
+        _artworkByPlaybackKey.remove(playbackKey);
+        _pendingAccentFallbackByPlaybackKey.remove(playbackKey);
       } else {
-        _artworkByPlaybackKey[key] = artwork;
-        if (resolvedAccent == null && previousDeviceAccent != null) {
-          _pendingAccentFallbackByPlaybackKey[key] = previousDeviceAccent;
+        _artworkByPlaybackKey[playbackKey] = artwork;
+        if (resolvedAccent == null && fallbackAccent != null) {
+          _pendingAccentFallbackByPlaybackKey[playbackKey] = fallbackAccent;
         } else {
-          _pendingAccentFallbackByPlaybackKey.remove(key);
+          _pendingAccentFallbackByPlaybackKey.remove(playbackKey);
         }
       }
     });
@@ -459,6 +504,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     if (_isLoadingPlayback) {
       _playbackMutationsDuringLoad.add((removed: true, playback: playback));
     }
+    _artworkGenerationByPlaybackKey.remove(key);
     _playbackArtworkCache.remove(key);
     if (_playbacksByKey.containsKey(key) ||
         _artworkByPlaybackKey.containsKey(key) ||
