@@ -68,6 +68,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     final colors = theme.colorScheme;
     final peer = widget.peer;
     final highlighted = _interacting;
+    final compact = widget.size < 100;
     final status = peer.statusLabel;
     final powerStatus = peer.statusKind == OrbitPeerStatusKind.trustedOnline
         ? peer.powerStatus
@@ -148,32 +149,36 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                     onFocusChange: (value) =>
                         _updateInteraction(focused: value),
                     child: Padding(
-                      padding: const EdgeInsets.all(11),
+                      padding: EdgeInsets.all(compact ? 5 : 11),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
                             _platformIcon(peer.platform),
-                            size: widget.size < 112 ? 24 : 28,
+                            size: compact ? 18 : (widget.size < 112 ? 24 : 28),
                             color: peer.isOnline
                                 ? accent
                                 : colors.onSurfaceVariant
                                     .withValues(alpha: 0.7),
                           ),
-                          const SizedBox(height: 6),
+                          SizedBox(height: compact ? 3 : 6),
                           Text(
                             peer.displayName,
                             textAlign: TextAlign.center,
-                            maxLines: 2,
+                            maxLines: compact ? 1 : 2,
                             overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
+                            style: (compact
+                                    ? theme.textTheme.labelSmall
+                                    : theme.textTheme.bodySmall)
+                                ?.copyWith(
                               color: colors.onSurface,
                               fontWeight: FontWeight.w700,
-                              height: 1.1,
+                              fontSize: compact ? 9 : null,
+                              height: compact ? 1 : 1.1,
                             ),
                           ),
                           if (status != null) ...[
-                            const SizedBox(height: 5),
+                            SizedBox(height: compact ? 3 : 5),
                             FittedBox(
                               fit: BoxFit.scaleDown,
                               child: Row(
@@ -187,23 +192,25 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                                       key: ValueKey(
                                         'orbit-peer-battery-${peer.deviceId}',
                                       ),
-                                      size: 13,
+                                      size: compact ? 10 : 13,
                                       color: accent,
                                     ),
-                                    const SizedBox(width: 3),
-                                    Text(
-                                      '${powerStatus.batteryPercent}%',
-                                      style:
-                                          theme.textTheme.labelSmall?.copyWith(
-                                        color: accent,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 10,
+                                    if (!compact) ...[
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        '${powerStatus.batteryPercent}%',
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                          color: accent,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 10,
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ] else ...[
                                     Container(
-                                      width: 6,
-                                      height: 6,
+                                      width: compact ? 5 : 6,
+                                      height: compact ? 5 : 6,
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
                                         color: peer.isOnline
@@ -211,27 +218,30 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                                             : colors.outline,
                                       ),
                                     ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      status,
-                                      style:
-                                          theme.textTheme.labelSmall?.copyWith(
-                                        color: peer.isOnline
-                                            ? accent
-                                            : colors.onSurfaceVariant,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 10,
+                                    if (!compact) ...[
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        status,
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                          color: peer.isOnline
+                                              ? accent
+                                              : colors.onSurfaceVariant,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 10,
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ],
                                   if (peer.isOnline &&
                                       peer.activity !=
                                           OrbitPeerActivity.none) ...[
-                                    const SizedBox(width: 6),
+                                    SizedBox(width: compact ? 3 : 6),
                                     _PlaybackStatusGlyph(
                                       deviceId: peer.deviceId,
                                       activity: peer.activity,
                                       color: accent,
+                                      compact: compact,
                                     ),
                                   ],
                                 ],
@@ -341,35 +351,37 @@ class _PlaybackStatusGlyph extends StatelessWidget {
     required this.deviceId,
     required this.activity,
     required this.color,
+    required this.compact,
   });
 
   final String deviceId;
   final OrbitPeerActivity activity;
   final Color color;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox.square(
       key: ValueKey('orbit-peer-status-${activity.name}-$deviceId'),
-      dimension: 13,
+      dimension: compact ? 11 : 13,
       child: switch (activity) {
         OrbitPeerActivity.mediaPlaying => Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _StatusBar(height: 6, color: color),
-              _StatusBar(height: 11, color: color),
-              _StatusBar(height: 8, color: color),
+              _StatusBar(height: compact ? 5 : 6, color: color),
+              _StatusBar(height: compact ? 9 : 11, color: color),
+              _StatusBar(height: compact ? 7 : 8, color: color),
             ],
           ),
         OrbitPeerActivity.mediaPaused => Icon(
             Icons.pause,
-            size: 13,
+            size: compact ? 11 : 13,
             color: color,
           ),
         OrbitPeerActivity.mediaBuffering => Icon(
             Icons.sync,
-            size: 12,
+            size: compact ? 10 : 12,
             color: color,
           ),
         OrbitPeerActivity.none => const SizedBox.shrink(),

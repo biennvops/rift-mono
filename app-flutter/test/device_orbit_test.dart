@@ -108,6 +108,59 @@ void main() {
     expect(geometry.peerSize, lessThan(102));
   });
 
+  testWidgets('short desktop orbit renders compact nodes without overflow',
+      (tester) async {
+    tester.view.physicalSize = const Size(700, 300);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final peers = List<OrbitPeerPresentation>.generate(
+      8,
+      (index) => OrbitPeerPresentation(
+        deviceId: 'peer-$index',
+        displayName: 'Long Device Name $index',
+        platform: index.isEven ? 'android' : 'linux',
+        isOnline: true,
+        powerStatus: const OrbitPeerPowerStatus(
+          batteryPercent: 87,
+          isCharging: true,
+        ),
+        activity: OrbitPeerActivity.mediaPlaying,
+        mediaTitle: 'A long track title',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceOrbitScene(
+          localDisplayName: 'Long Local Device Name',
+          localPlatform: 'macos',
+          peers: peers,
+          phase: const AlwaysStoppedAnimation<double>(0),
+          scanProgress: const AlwaysStoppedAnimation<double>(0),
+          peerKeyPrefix: 'compact-peer',
+          peerSemanticRole: 'trusted device',
+          onPeerSelected: (_) {},
+          onPeerInteractionChanged: (_, __) {},
+          onSceneFocusChanged: (_) {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getSize(find.byKey(const ValueKey('device-hub-local-core'))).width,
+      lessThan(90),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('compact-peer-peer-0'))).width,
+      lessThan(70),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test('orbit pause reasons compose', () {
     const moving = DeviceOrbitMotionState(
       reducedMotion: false,

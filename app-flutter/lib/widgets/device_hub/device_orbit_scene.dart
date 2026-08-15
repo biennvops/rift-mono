@@ -656,6 +656,7 @@ class _LocalDeviceCore extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final compact = size < 122;
     return Semantics(
       button: onTap != null,
       label: '$displayName, This Device',
@@ -677,33 +678,37 @@ class _LocalDeviceCore extends StatelessWidget {
           child: SizedBox.square(
             dimension: size,
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(compact ? 8 : 16),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
                     _platformIcon(platform),
-                    size: size < 145 ? 30 : 38,
+                    size: compact ? 20 : (size < 145 ? 30 : 38),
                     color: colors.primary,
                   ),
-                  const SizedBox(height: 9),
+                  SizedBox(height: compact ? 4 : 9),
                   Text(
                     displayName,
-                    maxLines: 2,
+                    maxLines: compact ? 1 : 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: theme.textTheme.titleSmall?.copyWith(
                       color: colors.onSurface,
                       fontWeight: FontWeight.w700,
-                      height: 1.1,
+                      fontSize: compact ? 11 : null,
+                      height: compact ? 1 : 1.1,
                     ),
                   ),
-                  const SizedBox(height: 7),
+                  SizedBox(height: compact ? 3 : 7),
                   Text(
                     'This Device',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: colors.primary,
                       fontWeight: FontWeight.w700,
+                      fontSize: compact ? 9 : null,
                     ),
                   ),
                 ],
