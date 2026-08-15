@@ -137,13 +137,9 @@ class PlaybackArtworkCache {
       return Future.value(existingArtwork);
     }
 
-    final pendingSourceMatches = sourceIdentity != null &&
-        sourceByteSize != null &&
-        existing?.pendingSourceIdentity == sourceIdentity &&
-        existing?.pendingByteSize == sourceByteSize;
     if (existing?.pending != null &&
         existing!.pendingMediaType == mediaType &&
-        (pendingSourceMatches || identical(existing.pendingEncoded, encoded))) {
+        identical(existing.pendingEncoded, encoded)) {
       return existing.pending!;
     }
 
@@ -182,8 +178,6 @@ class PlaybackArtworkCache {
       artwork: previousArtwork,
       pendingEncoded: encoded,
       pendingMediaType: mediaType,
-      pendingSourceIdentity: sourceIdentity,
-      pendingByteSize: sourceByteSize,
       pending: pending,
       requestToken: requestToken,
     );
@@ -205,8 +199,6 @@ class _PlaybackArtworkCacheEntry {
     required this.artwork,
     this.pendingEncoded,
     this.pendingMediaType,
-    this.pendingSourceIdentity,
-    this.pendingByteSize,
     this.pending,
     this.requestToken,
   });
@@ -214,8 +206,6 @@ class _PlaybackArtworkCacheEntry {
   final MediaArtwork? artwork;
   final String? pendingEncoded;
   final String? pendingMediaType;
-  final String? pendingSourceIdentity;
-  final int? pendingByteSize;
   final Future<MediaArtwork?>? pending;
   final Object? requestToken;
 }

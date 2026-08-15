@@ -139,6 +139,22 @@ void main() {
     expect(cache.debugParseCount, 2);
   });
 
+  test('does not coalesce pending artwork by unverified identity', () async {
+    final firstBytes = Uint8List.fromList(const [1, 2, 3]);
+    final secondBytes = Uint8List.fromList(const [4, 5, 6]);
+    final firstPayload = artworkPayload(firstBytes)..['sha256'] = '0' * 64;
+    final secondPayload = artworkPayload(secondBytes)..['sha256'] = '0' * 64;
+    final cache = PlaybackArtworkCache();
+
+    final firstFuture = cache.resolve('peer:session', firstPayload);
+    final secondFuture = cache.resolve('peer:session', secondPayload);
+
+    expect(cache.debugParseCount, 2);
+    final results = await Future.wait([firstFuture, secondFuture]);
+    expect(results[0]?.bytes, orderedEquals(firstBytes));
+    expect(results[1]?.bytes, orderedEquals(secondBytes));
+  });
+
   test('accent extraction is cached and bounded', () async {
     final redBytes = await imageBytes((canvas) {
       canvas.drawColor(const Color(0xFFD62828), BlendMode.src);
