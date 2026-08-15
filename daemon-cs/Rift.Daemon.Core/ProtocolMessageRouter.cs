@@ -256,11 +256,12 @@ public sealed class ProtocolMessageRouter(
         {
             EnsureProtectedMessageAllowed(session, "media.playback", messageType);
             var mediaPayload = root.GetProperty("payload");
+            var operationId = RequireMatchingMediaOperationId(root, mediaPayload, messageType);
             var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
             EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
             await mediaPlaybackSyncService.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
             {
-                OperationId = mediaPayload.GetProperty("operationId").GetString() ?? string.Empty,
+                OperationId = operationId,
                 PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
                 SourceDeviceId = payloadSourceDeviceId,
                 RequestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
@@ -276,12 +277,13 @@ public sealed class ProtocolMessageRouter(
         {
             EnsureProtectedMessageAllowed(session, "media.playback", messageType);
             var mediaPayload = root.GetProperty("payload");
+            var operationId = RequireMatchingMediaOperationId(root, mediaPayload, messageType);
             var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
             var requestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty;
             EnsureEnvelopeIdentityMatches(peerDeviceId, requestingDeviceId, messageType);
             await mediaPlaybackSyncService.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
             {
-                OperationId = mediaPayload.GetProperty("operationId").GetString() ?? string.Empty,
+                OperationId = operationId,
                 PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
                 SourceDeviceId = payloadSourceDeviceId,
                 RequestingDeviceId = requestingDeviceId,
@@ -508,6 +510,23 @@ public sealed class ProtocolMessageRouter(
         }
 
         throw new UnauthorizedAccessException($"{messageType} sourceDeviceId did not match the authenticated peer identity.");
+    }
+
+    private static string RequireMatchingMediaOperationId(
+        JsonElement envelope,
+        JsonElement payload,
+        string messageType)
+    {
+        var envelopeOperationId = envelope.GetProperty("operationId").GetString() ?? string.Empty;
+        var payloadOperationId = payload.GetProperty("operationId").GetString() ?? string.Empty;
+        if (!string.Equals(envelopeOperationId, payloadOperationId, StringComparison.Ordinal))
+        {
+            throw new MediaPlaybackSyncFailureException(
+                $"{messageType} envelope and payload operationId values did not match.",
+                -32010);
+        }
+
+        return payloadOperationId;
     }
 
     private async Task LogDeviceStatusIdentityMismatchAsync(

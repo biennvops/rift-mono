@@ -386,6 +386,7 @@ void main() {
       await postLocalPlayback();
       await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
         'type': 'media.playbackActionRequest',
+        'operationId': incomingOperationId,
         'payload': {
           'operationId': incomingOperationId,
           'playbackId': 'local-playback',
@@ -556,6 +557,7 @@ void main() {
         {
           'type': 'media.playbackActionRequest',
           'payload': {
+            'operationId': incomingOperationId,
             'playbackId': 'local-playback',
             'sourceDeviceId': localDeviceId,
             'requestingDeviceId': peerDeviceId,
@@ -564,6 +566,7 @@ void main() {
         },
         {
           'type': 'media.playbackActionRequest',
+          'operationId': incomingOperationId,
           'payload': {
             'operationId': incomingOperationId,
             'playbackId': 'local-playback',
@@ -574,6 +577,7 @@ void main() {
         },
         {
           'type': 'media.playbackActionRequest',
+          'operationId': incomingOperationId,
           'payload': {
             'operationId': incomingOperationId,
             'playbackId': 'local-playback',
@@ -607,6 +611,42 @@ void main() {
       );
     });
 
+    test(
+      'rejects mismatched media operation IDs without IPC delivery',
+      () async {
+        const peerDeviceId = 'rift-peer-device';
+        configureMediaPlaybackPeer(peerDeviceId);
+        final localDeviceId = daemon.getDeviceInfo()['deviceId'];
+
+        await daemon.handleMediaPlaybackProtocolMessageForTesting(
+          peerDeviceId,
+          {
+            'type': 'media.playbackActionRequest',
+            'messageId': '11111111-1111-4111-8111-111111111111',
+            'operationId': incomingOperationId,
+            'payload': {
+              'operationId': '018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb',
+              'playbackId': 'local-playback',
+              'sourceDeviceId': localDeviceId,
+              'requestingDeviceId': peerDeviceId,
+              'action': 'pause',
+            },
+          },
+        );
+
+        expect(
+          ipcEvents.where(
+            (event) => event['method'] == 'rift.onMediaPlaybackActionRequest',
+          ),
+          isEmpty,
+        );
+        final error = transport.sentMessages.singleWhere(
+          (message) => message['type'] == 'error',
+        );
+        expect(error['payload']['failureReason'], 'ProtocolError');
+      },
+    );
+
     test('rejects media identity mismatches without IPC delivery', () async {
       const peerDeviceId = 'rift-peer-device';
       configureMediaPlaybackPeer(peerDeviceId);
@@ -615,6 +655,7 @@ void main() {
       await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
         'type': 'media.playbackActionRequest',
         'messageId': '11111111-1111-4111-8111-111111111111',
+        'operationId': incomingOperationId,
         'payload': {
           'operationId': incomingOperationId,
           'playbackId': 'local-playback',
@@ -643,6 +684,7 @@ void main() {
           peerDeviceId,
           {
             'type': 'media.playbackActionRequest',
+            'operationId': incomingOperationId,
             'payload': {
               'operationId': incomingOperationId,
               'playbackId': 'missing-playback',
@@ -657,6 +699,7 @@ void main() {
           peerDeviceId,
           {
             'type': 'media.playbackActionRequest',
+            'operationId': incomingOperationId,
             'payload': {
               'operationId': incomingOperationId,
               'playbackId': 'restricted',
@@ -696,6 +739,7 @@ void main() {
         final request = transport.sentMessages.singleWhere(
           (message) => message['type'] == 'media.playbackActionRequest',
         );
+        expect(request['operationId'], result['operationId']);
         expect(request['payload']['operationId'], result['operationId']);
       },
     );
@@ -718,6 +762,7 @@ void main() {
       Future<void> deliverResult(String operationId) =>
           daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
             'type': 'media.playbackActionResult',
+            'operationId': operationId,
             'payload': {
               'operationId': operationId,
               'playbackId': 'remote-playback',
@@ -764,6 +809,7 @@ void main() {
 
       await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
         'type': 'media.playbackActionResult',
+        'operationId': pending['operationId'],
         'payload': {
           'operationId': pending['operationId'],
           'playbackId': 'different-playback',
@@ -797,6 +843,7 @@ void main() {
 
       await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
         'type': 'media.playbackActionResult',
+        'operationId': '018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb',
         'payload': {
           'operationId': '018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb',
           'playbackId': 'remote-playback',
@@ -833,6 +880,7 @@ void main() {
 
       await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
         'type': 'media.playbackActionRequest',
+        'operationId': incomingOperationId,
         'payload': {
           'operationId': incomingOperationId,
           'playbackId': 'local-playback',
@@ -870,6 +918,7 @@ void main() {
           peerDeviceId,
           {
             'type': 'media.playbackActionRequest',
+            'operationId': incomingOperationId,
             'payload': {
               'operationId': incomingOperationId,
               'playbackId': 'local-playback',
@@ -899,6 +948,7 @@ void main() {
         final result = transport.sentMessages.singleWhere(
           (message) => message['type'] == 'media.playbackActionResult',
         );
+        expect(result['operationId'], incomingOperationId);
         expect(result['payload']['operationId'], incomingOperationId);
       },
     );

@@ -1535,6 +1535,107 @@ void main() {
       }
     });
 
+    test('Android success reconciles after a reordered playback update',
+        () async {
+      const shellChannel = MethodChannel('rift/android/shell');
+      final nativeCalls = <MethodCall>[];
+      AndroidShell.debugIsAndroidOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shellChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-1',
+            'sourceDeviceId': 'rift-peer',
+            'appId': 'com.example.music',
+            'appName': 'Example Music',
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-16T10:00:00Z',
+          }
+        ],
+      };
+      transport.getMediaPlaybackResult = {
+        ...Map<String, dynamic>.from(
+          (transport.listMediaPlaybackResult['playbacks'] as List).single
+              as Map,
+        ),
+        'playbackState': 'paused',
+        'canPlay': true,
+        'canPause': false,
+        'updatedAt': '2026-07-16T10:00:02Z',
+      };
+      await client.connect();
+      final coordinator = AndroidRemoteMediaPlaybackCoordinator(
+        client,
+        successfulActionReconciliationDelay: Duration.zero,
+      );
+
+      try {
+        await coordinator.start();
+        await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          }),
+        );
+        transport.emitNotification('rift.onMediaPlaybackUpdated', {
+          'playbackId': 'playback-1',
+          'sourceDeviceId': 'rift-peer',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'canPlay': false,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+          'updatedAt': '2026-07-16T10:00:01Z',
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        transport.emitNotification('rift.onMediaPlaybackActionResult', {
+          'operationId': '018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa',
+          'playbackId': 'playback-1',
+          'sourceDeviceId': 'rift-peer',
+          'action': 'pause',
+          'state': 'Done',
+          'success': true,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        expect(
+          transport.requests.where(
+            (request) => request['method'] == 'rift.getMediaPlayback',
+          ),
+          hasLength(1),
+        );
+        final reconciledPlayback = Map<String, dynamic>.from(
+          (nativeCalls
+              .lastWhere((call) => call.method == 'showMediaPlayback')
+              .arguments as Map)['playback'] as Map,
+        );
+        expect(reconciledPlayback['playbackState'], 'paused');
+        expect(reconciledPlayback['canPlay'], isTrue);
+        expect(reconciledPlayback['canPause'], isFalse);
+      } finally {
+        await coordinator.dispose();
+        AndroidShell.debugIsAndroidOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(shellChannel, null);
+      }
+    });
+
     test('iOS mirrors playback state and routes native seek actions', () async {
       const mediaPlaybackChannel = MethodChannel('rift/ios/media_playback');
       final nativeCalls = <MethodCall>[];

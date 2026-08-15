@@ -265,6 +265,10 @@ void _applyNotificationActionResult(
 void _runMediaPlaybackActionCorrelation(Map<String, dynamic> testCase) {
   final input = Map<String, dynamic>.from(testCase['input'] as Map);
   final expected = Map<String, dynamic>.from(testCase['expected'] as Map);
+  if (input['envelope'] is Map) {
+    _runMediaPlaybackActionEnvelope(input, expected);
+    return;
+  }
   final initialRequest = Map<String, dynamic>.from(
     input['initialRequest'] as Map,
   );
@@ -303,6 +307,42 @@ void _runMediaPlaybackActionCorrelation(Map<String, dynamic> testCase) {
   _expectEquals(expected['result'], 'accept');
 }
 
+void _runMediaPlaybackActionEnvelope(
+  Map<String, dynamic> input,
+  Map<String, dynamic> expected,
+) {
+  final envelope = Map<String, dynamic>.from(input['envelope'] as Map);
+  final payload = envelope['payload'] is Map
+      ? Map<String, dynamic>.from(envelope['payload'] as Map)
+      : <String, dynamic>{};
+  final envelopeOperationId = envelope['operationId'];
+  final payloadOperationId = payload['operationId'];
+
+  late final String result;
+  String? error;
+  if (envelopeOperationId is! String ||
+      !_isValidMediaOperationId(envelopeOperationId) ||
+      payloadOperationId is! String ||
+      !_isValidMediaOperationId(payloadOperationId)) {
+    result = 'reject';
+    error = 'MalformedMessage';
+  } else if (envelopeOperationId != payloadOperationId) {
+    result = 'reject';
+    error = 'ProtocolError';
+  } else {
+    result = 'accept';
+  }
+
+  _expectEquals(result, expected['result']);
+  if (result == 'reject') {
+    _expectEquals(error, expected['error']);
+  }
+}
+
+bool _isValidMediaOperationId(String value) => RegExp(
+  r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+).hasMatch(value);
+
 void _validateMediaPlaybackActionPayload(
   Map<String, dynamic> payload, {
   required bool isResult,
@@ -318,9 +358,7 @@ void _validateMediaPlaybackActionPayload(
       throw StateError('$field is required');
     }
   }
-  if (!RegExp(
-    r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
-  ).hasMatch(payload['operationId'] as String)) {
+  if (!_isValidMediaOperationId(payload['operationId'] as String)) {
     throw StateError('operationId must be a lowercase UUIDv4');
   }
   if (!const {

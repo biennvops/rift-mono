@@ -42,6 +42,77 @@
         "stateAfterLateResult": "Dispatched",
         "finalState": "Done"
       }
+    },
+    {
+      "id": "matching-envelope-operation-id-001",
+      "description": "An action envelope and payload must carry the same operation ID",
+      "input": {
+        "envelope": {
+          "rift": "0.1-draft",
+          "type": "media.playbackActionRequest",
+          "messageId": "018f2f9a-8b7c-4a4b-9c0d-111111111111",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+          "payload": {
+            "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+            "playbackId": "com.example.music:now-playing",
+            "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+            "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "action": "pause"
+          }
+        }
+      },
+      "expected": {
+        "result": "accept"
+      }
+    },
+    {
+      "id": "missing-envelope-operation-id-001",
+      "description": "An action payload operation ID does not replace the required envelope operation ID",
+      "input": {
+        "envelope": {
+          "rift": "0.1-draft",
+          "type": "media.playbackActionRequest",
+          "messageId": "018f2f9a-8b7c-4a4b-9c0d-222222222222",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payload": {
+            "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+            "playbackId": "com.example.music:now-playing",
+            "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+            "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "action": "pause"
+          }
+        }
+      },
+      "expected": {
+        "result": "reject",
+        "error": "MalformedMessage"
+      }
+    },
+    {
+      "id": "mismatched-envelope-operation-id-001",
+      "description": "An action result envelope cannot name a different operation than its payload",
+      "input": {
+        "envelope": {
+          "rift": "0.1-draft",
+          "type": "media.playbackActionResult",
+          "messageId": "018f2f9a-8b7c-4a4b-9c0d-333333333333",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+          "payload": {
+            "operationId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
+            "playbackId": "com.example.music:now-playing",
+            "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+            "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "action": "pause",
+            "success": true
+          }
+        }
+      },
+      "expected": {
+        "result": "reject",
+        "error": "ProtocolError"
+      }
     }
   ]
 }

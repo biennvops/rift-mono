@@ -382,8 +382,9 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             {
                 actionPayload["positionMs"] = positionMs.Value;
             }
-            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateOperationEnvelope(
                 "media.playbackActionRequest",
+                operationId,
                 actionPayload)));
             await _transport.SendAsync(playback.SourceDeviceId, bytes, cancellationToken).ConfigureAwait(false);
         }
@@ -994,6 +995,16 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         payload
     };
 
+    private object CreateOperationEnvelope(string type, string operationId, object payload) => new
+    {
+        rift = "0.1-draft",
+        type,
+        messageId = Guid.NewGuid().ToString("D"),
+        sourceDeviceId = _identityManager.GetDeviceId(),
+        operationId,
+        payload
+    };
+
     private async Task<IReadOnlyList<string>> BroadcastAsync(string messageType, object payload, CancellationToken cancellationToken)
     {
         var sentTo = new List<string>();
@@ -1028,8 +1039,9 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         string? message,
         CancellationToken cancellationToken)
     {
-        var envelope = CreateEnvelope(
+        var envelope = CreateOperationEnvelope(
             "media.playbackActionResult",
+            pending.OperationId,
             new
             {
                 operationId = pending.OperationId,

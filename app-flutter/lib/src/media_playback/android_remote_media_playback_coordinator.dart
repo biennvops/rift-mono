@@ -6,17 +6,19 @@ import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/platform/android_shell.dart';
 
 class AndroidRemoteMediaPlaybackCoordinator {
-  AndroidRemoteMediaPlaybackCoordinator(this._client);
+  AndroidRemoteMediaPlaybackCoordinator(
+    this._client, {
+    Duration successfulActionReconciliationDelay = const Duration(seconds: 2),
+  }) : _successfulActionReconciliationDelay =
+            successfulActionReconciliationDelay;
 
   static final RegExp _uuidV4 = RegExp(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
   );
-  static const Duration _successfulActionReconciliationDelay = Duration(
-    seconds: 2,
-  );
   static const int _maxEarlyActionResults = 32;
 
   final JsonRpcRiftClient _client;
+  final Duration _successfulActionReconciliationDelay;
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
   final Map<String, _PendingRemoteMediaAction> _pendingActionsByOperationId =
@@ -244,7 +246,8 @@ class AndroidRemoteMediaPlaybackCoordinator {
       return;
     }
     final key = _keyFor(playback);
-    _clearPlaybackOwnership(key);
+    // Playback events can be reordered around an action result, so they update
+    // displayed state without canceling that operation's bounded reconciliation.
     _playbacksByKey[key] = Map<String, dynamic>.from(playback);
     _nextRevision(key);
     unawaited(_queueNativeStateSync().catchError((_) {}));

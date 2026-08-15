@@ -2048,6 +2048,7 @@ class RiftDaemon {
       'type': 'media.playbackActionResult',
       'sourceDeviceId': _identityManager!.deviceId,
       'destinationDeviceId': requestingDeviceId,
+      'operationId': request['operationId'],
       'payload': {
         'operationId': request['operationId'],
         'playbackId': request['playbackId'],
@@ -2119,6 +2120,22 @@ class RiftDaemon {
       );
     }
     return operationId;
+  }
+
+  String _requireMatchingMediaPlaybackOperationId(
+    Map<String, dynamic> envelope,
+    Map<String, dynamic> payload,
+    String messageType,
+  ) {
+    final envelopeOperationId = _requireMediaPlaybackOperationId(envelope);
+    final payloadOperationId = _requireMediaPlaybackOperationId(payload);
+    if (envelopeOperationId != payloadOperationId) {
+      throw RiftException(
+        -32010,
+        '$messageType envelope and payload operationId values do not match',
+      );
+    }
+    return payloadOperationId;
   }
 
   String? _optionalMediaPlaybackTimestamp(
@@ -3028,7 +3045,11 @@ class RiftDaemon {
     }
 
     if (type == 'media.playbackActionRequest') {
-      final operationId = _requireMediaPlaybackOperationId(payload);
+      final operationId = _requireMatchingMediaPlaybackOperationId(
+        message.payload,
+        payload,
+        type,
+      );
       final sourceDeviceId = RpcUtils.requireStringParam(
         payload,
         'sourceDeviceId',
@@ -3144,7 +3165,11 @@ class RiftDaemon {
     }
 
     if (type == 'media.playbackActionResult') {
-      final operationId = _requireMediaPlaybackOperationId(payload);
+      final operationId = _requireMatchingMediaPlaybackOperationId(
+        message.payload,
+        payload,
+        type,
+      );
       final requestingDeviceId = RpcUtils.requireStringParam(
         payload,
         'requestingDeviceId',

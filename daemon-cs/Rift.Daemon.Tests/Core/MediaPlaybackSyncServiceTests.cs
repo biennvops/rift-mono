@@ -69,8 +69,9 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         var sent = Assert.Single(_transport.SentMessages);
         Assert.Equal("rift-peer", sent.PeerDeviceId);
         Assert.Equal("media.playbackActionResult", sent.Type);
-        var payload = Assert.Single(_transport.Payloads).GetProperty("payload");
-        Assert.Equal(operationId, payload.GetProperty("operationId").GetString());
+        var envelope = Assert.Single(_transport.Payloads);
+        Assert.Equal(operationId, envelope.GetProperty("operationId").GetString());
+        Assert.Equal(operationId, envelope.GetProperty("payload").GetProperty("operationId").GetString());
     }
 
     [Fact]
@@ -449,6 +450,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         var first = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
         var actionRequest = Assert.Single(_transport.Payloads, payload =>
             payload.GetProperty("type").GetString() == "media.playbackActionRequest");
+        Assert.Equal(first.OperationId, actionRequest.GetProperty("operationId").GetString());
         Assert.Equal(first.OperationId, actionRequest.GetProperty("payload").GetProperty("operationId").GetString());
         Assert.False(actionRequest.GetProperty("payload").TryGetProperty("positionMs", out _));
         var duplicate = await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>

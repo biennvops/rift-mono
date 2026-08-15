@@ -94,6 +94,11 @@ public static class Runner
     {
         var input = testCase.GetProperty("input");
         var expected = testCase.GetProperty("expected");
+        if (input.TryGetProperty("envelope", out var envelope))
+        {
+            RunMediaPlaybackActionEnvelope(envelope, expected);
+            return;
+        }
         var initialRequest = input.GetProperty("initialRequest");
         var retryRequest = input.GetProperty("retryRequest");
         var lateResult = input.GetProperty("lateResult");
@@ -131,6 +136,48 @@ public static class Runner
         ApplyMediaPlaybackActionResult(pending, states, retryResult);
         ExpectEqual(states[retryOperationId], expected.GetProperty("finalState").GetString());
         ExpectEqual(expected.GetProperty("result").GetString(), "accept");
+    }
+
+    private static void RunMediaPlaybackActionEnvelope(JsonElement envelope, JsonElement expected)
+    {
+        var envelopeOperationId =
+            envelope.TryGetProperty("operationId", out var envelopeOperationElement) &&
+            envelopeOperationElement.ValueKind == JsonValueKind.String
+                ? envelopeOperationElement.GetString()
+                : null;
+        var payloadOperationId =
+            envelope.TryGetProperty("payload", out var payload) &&
+            payload.ValueKind == JsonValueKind.Object &&
+            payload.TryGetProperty("operationId", out var payloadOperationElement) &&
+            payloadOperationElement.ValueKind == JsonValueKind.String
+                ? payloadOperationElement.GetString()
+                : null;
+
+        string result;
+        string? error = null;
+        if (envelopeOperationId is null ||
+            !UuidV4.IsMatch(envelopeOperationId) ||
+            payloadOperationId is null ||
+            !UuidV4.IsMatch(payloadOperationId))
+        {
+            result = "reject";
+            error = "MalformedMessage";
+        }
+        else if (!string.Equals(envelopeOperationId, payloadOperationId, StringComparison.Ordinal))
+        {
+            result = "reject";
+            error = "ProtocolError";
+        }
+        else
+        {
+            result = "accept";
+        }
+
+        ExpectEqual(result, expected.GetProperty("result").GetString());
+        if (result == "reject")
+        {
+            ExpectEqual(error, expected.GetProperty("error").GetString());
+        }
     }
 
     private static void ValidateMediaPlaybackActionPayload(JsonElement payload, bool isResult)
