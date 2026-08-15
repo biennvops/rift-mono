@@ -230,7 +230,7 @@ class TransportImpl
         final keepExisting =
             previousIsServer == preferredIsServer ||
             isServer != preferredIsServer;
-        if (keepExisting) {
+        if (keepExisting && !forceFreshSession) {
           RiftLog.info(
             '[TLS] Keeping the deterministic ${preferredIsServer ? "inbound" : "outbound"} '
             'session for peerDeviceId=$peerDeviceId and dropping the duplicate.',
@@ -245,10 +245,13 @@ class TransportImpl
 
         RiftLog.debug(
           '[TLS] Replacing duplicate socket for peerDeviceId=$peerDeviceId '
+          'forceFreshSession=$forceFreshSession '
           'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
           'existingRole=${previousIsServer ? "inbound" : "outbound"} '
           'replacementRole=${isServer ? "inbound" : "outbound"}',
         );
+        _authenticatedPeers.remove(peerDeviceId);
+        _peerWriteGates[peerDeviceId] = PeerWriteGate();
         try {
           previousSocket.destroy();
         } catch (_) {

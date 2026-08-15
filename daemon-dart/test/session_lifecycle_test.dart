@@ -103,6 +103,39 @@ void main() {
     });
 
     test(
+      'stale session context is replaced on the current connection',
+      () async {
+        final firstConnection = Object();
+        final replacementConnection = Object();
+        transport.peerCertificates['rift-peer'] = Uint8List(32);
+        transport.setCurrentConnection('rift-peer', firstConnection);
+
+        await manager.sendSessionHello('rift-peer');
+        final firstContext = manager.getContext('rift-peer');
+        expect(firstContext?.connectionToken, same(firstConnection));
+
+        transport.setCurrentConnection('rift-peer', replacementConnection);
+
+        expect(manager.getContext('rift-peer'), isNull);
+        await manager.sendSessionHello('rift-peer');
+
+        final replacementContext = manager.getContext('rift-peer');
+        expect(
+          replacementContext?.connectionToken,
+          same(replacementConnection),
+        );
+        expect(replacementContext, isNot(same(firstContext)));
+        expect(
+          transport.sentMessages.where(
+            (message) => message['type'] == 'session.hello',
+          ),
+          hasLength(2),
+        );
+        expect(transport.peerDisconnects, isEmpty);
+      },
+    );
+
+    test(
       'one heartbeat send failure does not disconnect the session',
       () async {
         final connection = Object();

@@ -132,6 +132,63 @@ void main() {
       expect(transport.currentConnectionToken(peerDeviceId), isNull);
       expect(transport.isCurrentConnection(peerDeviceId, connection), isFalse);
     });
+
+    test('force fresh session replaces the existing socket', () async {
+      final serverContext = SecurityContext()
+        ..useCertificateChainBytes(
+          utf8.encode(secondIdentity.tlsCertificatePem),
+        )
+        ..usePrivateKeyBytes(utf8.encode(secondIdentity.tlsPrivateKeyPem));
+      final server = await SecureServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+        serverContext,
+        requestClientCertificate: false,
+        requireClientCertificate: false,
+      );
+      final acceptedSockets = <SecureSocket>[];
+      final acceptedSubscriptions = <StreamSubscription<Uint8List>>[];
+      final serverSubscription = server.listen((socket) {
+        acceptedSockets.add(socket);
+        acceptedSubscriptions.add(socket.listen((_) {}, onError: (_) {}));
+      });
+      addTearDown(() async {
+        await serverSubscription.cancel();
+        await server.close();
+        for (final socket in acceptedSockets) {
+          socket.destroy();
+        }
+        for (final subscription in acceptedSubscriptions) {
+          await subscription.cancel();
+        }
+      });
+
+      final connectedPeer = await transport.connectTo(
+        InternetAddress.loopbackIPv4.address,
+        server.port,
+        expectedDeviceId: secondIdentity.deviceId,
+      );
+      final firstConnection = transport.currentConnectionToken(connectedPeer);
+      expect(firstConnection, isNotNull);
+
+      await transport.connectTo(
+        InternetAddress.loopbackIPv4.address,
+        server.port,
+        expectedDeviceId: secondIdentity.deviceId,
+        forceFreshSession: true,
+      );
+      final replacementConnection = transport.currentConnectionToken(
+        connectedPeer,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(replacementConnection, isNotNull);
+      expect(replacementConnection, isNot(same(firstConnection)));
+      expect(
+        transport.currentConnectionToken(connectedPeer),
+        same(replacementConnection),
+      );
+    });
   });
 }
 

@@ -542,7 +542,10 @@ class SessionManager {
     _transport.disconnect(peerDeviceId);
   }
 
-  SessionContext? getContext(String peerDeviceId) => _sessions[peerDeviceId];
+  SessionContext? getContext(String peerDeviceId) {
+    final ctx = _sessions[peerDeviceId];
+    return ctx != null && _isCurrentContext(ctx) ? ctx : null;
+  }
 
   @visibleForTesting
   // Exposed solely for testing capability and presence logic without mocking real Ed25519 PoP crypto
@@ -592,7 +595,15 @@ class SessionManager {
   Future<void> sendSessionHello(String peerDeviceId) async {
     final existing = _sessions[peerDeviceId];
     if (existing != null) {
-      throw SessionException('Session already exists for $peerDeviceId');
+      if (_isCurrentContext(existing)) {
+        throw SessionException('Session already exists for $peerDeviceId');
+      }
+      if (identical(_sessions[peerDeviceId], existing)) {
+        _sessions.remove(peerDeviceId);
+        _testingContexts.remove(existing);
+        _inboundMessageTails.remove(peerDeviceId);
+        existing.dispose();
+      }
     }
     final connectionToken = _currentConnectionToken(peerDeviceId);
     if (_connectionScopedTransport != null && connectionToken == null) {
