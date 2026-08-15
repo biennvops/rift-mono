@@ -30,12 +30,18 @@ class _PickSendFilesResult {
 }
 
 class FileSendView extends StatefulWidget {
+  final String? preferredTargetDeviceId;
+  final int? targetRequestVersion;
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
+  final VoidCallback? onTargetScopeCleared;
   final VoidCallback? onViewActivityRequested;
 
   const FileSendView({
     super.key,
+    this.preferredTargetDeviceId,
+    this.targetRequestVersion,
     this.pickSendFilesOverride,
+    this.onTargetScopeCleared,
     this.onViewActivityRequested,
   });
 
@@ -52,6 +58,7 @@ class _FileSendViewState extends State<FileSendView> {
   final Set<String> _legacySendingFilePeerIds = <String>{};
 
   bool _hasUserModifiedSendDevices = false;
+  String? _preferredTargetDeviceId;
 
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
   StreamSubscription<Map<String, dynamic>>? _fileProgressSub;
@@ -65,12 +72,31 @@ class _FileSendViewState extends State<FileSendView> {
   @override
   void initState() {
     super.initState();
+    _applyPreferredTarget();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_sendQueue.ensureRestored());
       _bindStreams();
       _refreshTrustedPeers();
       _refreshTransfers();
     });
+  }
+
+  @override
+  void didUpdateWidget(FileSendView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
+        oldWidget.preferredTargetDeviceId != widget.preferredTargetDeviceId) {
+      _applyPreferredTarget();
+    }
+  }
+
+  void _applyPreferredTarget() {
+    _preferredTargetDeviceId = widget.preferredTargetDeviceId;
+    if (_preferredTargetDeviceId != null &&
+        _preferredTargetDeviceId!.isNotEmpty) {
+      _hasUserModifiedSendDevices = false;
+      _selectedSendDeviceIds.clear();
+    }
   }
 
   @override
@@ -407,6 +433,7 @@ class _FileSendViewState extends State<FileSendView> {
         _hasUserModifiedSendDevices = true;
         _selectedSendDeviceIds.clear();
         _selectedSendDeviceIds.addAll(effectiveSelectedIds);
+        widget.onTargetScopeCleared?.call();
       }
       if (_selectedSendDeviceIds.contains(deviceId)) {
         _selectedSendDeviceIds.remove(deviceId);
@@ -414,6 +441,23 @@ class _FileSendViewState extends State<FileSendView> {
         _selectedSendDeviceIds.add(deviceId);
       }
     });
+  }
+
+  Set<String> _effectiveSelectedIds(List<Map<String, dynamic>> peers) {
+    if (_selectedSendDeviceIds.isNotEmpty || _hasUserModifiedSendDevices) {
+      return _selectedSendDeviceIds.intersection(
+        peers.map((p) => p['deviceId']?.toString() ?? '').toSet(),
+      );
+    }
+    final preferred = _preferredTargetDeviceId;
+    if (preferred != null && preferred.isNotEmpty) {
+      return peers.any((peer) => peer['deviceId']?.toString() == preferred)
+          ? <String>{preferred}
+          : <String>{};
+    }
+    return peers.isNotEmpty
+        ? <String>{peers.first['deviceId']?.toString() ?? ''}
+        : <String>{};
   }
 
   Future<void> _sendStagedFilesToSelectedPeers() async {
@@ -428,11 +472,7 @@ class _FileSendViewState extends State<FileSendView> {
       );
       return;
     }
-    final effectiveSelectedIds =
-        _selectedSendDeviceIds.isNotEmpty || _hasUserModifiedSendDevices
-            ? _selectedSendDeviceIds.intersection(
-                peers.map((p) => p['deviceId']?.toString() ?? '').toSet())
-            : <String>{peers.first['deviceId']?.toString() ?? ''};
+    final effectiveSelectedIds = _effectiveSelectedIds(peers);
 
     if (effectiveSelectedIds.isEmpty) return;
 
@@ -765,12 +805,11 @@ class _FileSendViewState extends State<FileSendView> {
         f.status == SendQueueStatus.queued ||
         f.status == SendQueueStatus.failed);
 
-    final effectiveSelectedIds =
-        _selectedSendDeviceIds.isNotEmpty || _hasUserModifiedSendDevices
-            ? _selectedSendDeviceIds
-            : peers.isNotEmpty
-                ? <String>{peers.first['deviceId']?.toString() ?? ''}
-                : <String>{};
+    final effectiveSelectedIds = _effectiveSelectedIds(peers);
+    final preferredTargetUnavailable = _preferredTargetDeviceId?.isNotEmpty ==
+            true &&
+        !peers.any(
+            (peer) => peer['deviceId']?.toString() == _preferredTargetDeviceId);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -787,6 +826,7 @@ class _FileSendViewState extends State<FileSendView> {
           peers: peers,
           effectiveSelectedIds: effectiveSelectedIds,
           hasSendableFiles: hasSendableFiles,
+          preferredTargetUnavailable: preferredTargetUnavailable,
         ),
         const SizedBox(height: 10),
         _buildTransferHubQueueCard(theme, queueItems),
@@ -799,6 +839,7 @@ class _FileSendViewState extends State<FileSendView> {
     required List<Map<String, dynamic>> peers,
     required Set<String> effectiveSelectedIds,
     required bool hasSendableFiles,
+    required bool preferredTargetUnavailable,
   }) {
     final isMobile = MediaQuery.sizeOf(context).width < 600;
     return Container(
@@ -887,6 +928,7 @@ class _FileSendViewState extends State<FileSendView> {
                           effectiveSelectedIds.contains(deviceId);
                       return _buildDeviceSelectChip(
                         theme,
+                        deviceId: deviceId,
                         label: _peerLabel(deviceId),
                         platform: peer['platform']?.toString(),
                         isSelected: isSelected,
@@ -898,6 +940,17 @@ class _FileSendViewState extends State<FileSendView> {
                     }).toList(),
                   );
                 },
+              ),
+            if (preferredTargetUnavailable)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Target device is unavailable for file transfer.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
             if (_sendQueue.items.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -958,6 +1011,7 @@ class _FileSendViewState extends State<FileSendView> {
   Widget _buildDeviceSelectChip(
     ThemeData theme, {
     required String label,
+    required String deviceId,
     required String? platform,
     required bool isSelected,
     required bool isOnline,
@@ -967,7 +1021,7 @@ class _FileSendViewState extends State<FileSendView> {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        key: ValueKey('send-device-chip-$label'),
+        key: ValueKey('send-device-chip-$deviceId'),
         width: width,
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),

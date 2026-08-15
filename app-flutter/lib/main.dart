@@ -1044,6 +1044,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       builder: (_) => PairingScreen.incoming(
         deviceId: deviceId,
         displayName: payload['displayName']?.toString(),
+        platform: payload['platform']?.toString(),
         fingerprint: fingerprint,
         expiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
       ),

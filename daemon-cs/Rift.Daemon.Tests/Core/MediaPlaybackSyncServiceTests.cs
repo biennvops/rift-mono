@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -416,10 +417,47 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         Assert.Equal("image/jpeg", artwork.GetProperty("mediaType").GetString());
         var normalizedBytes = Convert.FromBase64String(artwork.GetProperty("dataBase64").GetString()!);
         Assert.InRange(normalizedBytes.Length, 1, 2 * 1024 * 1024);
+        Assert.Equal(normalizedBytes.Length, artwork.GetProperty("byteSize").GetInt32());
+        Assert.Equal(
+            Convert.ToHexStringLower(SHA256.HashData(normalizedBytes)),
+            artwork.GetProperty("sha256").GetString());
         using var normalized = SKBitmap.Decode(normalizedBytes);
         Assert.NotNull(normalized);
         Assert.InRange(normalized!.Width, 1, 1024);
         Assert.InRange(normalized.Height, 1, 1024);
+    }
+
+    [Fact]
+    public async Task PublishLocalPlaybackToPeerAsync_AddsArtworkIdentityMetadata()
+    {
+        using var source = new SKBitmap(8, 8);
+        source.Erase(SKColors.CornflowerBlue);
+        using var image = SKImage.FromBitmap(source);
+        using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+        var bytes = encoded.ToArray();
+        var playback = CreatePlayback(
+            string.Empty,
+            "playback-artwork",
+            "Artwork",
+            new Dictionary<string, object?>
+            {
+                ["dataBase64"] = Convert.ToBase64String(bytes),
+                ["mediaType"] = "image/png"
+            });
+        var service = CreateService();
+
+        await service.PublishLocalPlaybackToPeerAsync(
+            "rift-new-peer",
+            playback,
+            CancellationToken.None);
+
+        var artwork = Assert.Single(_transport.Payloads)
+            .GetProperty("payload")
+            .GetProperty("artwork");
+        Assert.Equal(bytes.Length, artwork.GetProperty("byteSize").GetInt32());
+        Assert.Equal(
+            Convert.ToHexStringLower(SHA256.HashData(bytes)),
+            artwork.GetProperty("sha256").GetString());
     }
 
     [Fact]

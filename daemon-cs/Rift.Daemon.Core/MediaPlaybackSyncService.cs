@@ -1203,10 +1203,10 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             return WithoutArtworkData(normalized);
         }
 
-        var cacheKey = Convert.ToHexString(SHA256.HashData(sourceBytes));
+        var sourceSha256 = Convert.ToHexStringLower(SHA256.HashData(sourceBytes));
         lock (_artworkCacheGate)
         {
-            if (_artworkCache.TryGetValue(cacheKey, out var cached))
+            if (_artworkCache.TryGetValue(sourceSha256, out var cached))
             {
                 return cached;
             }
@@ -1223,7 +1223,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             source.Width <= MaxArtworkDimension &&
             source.Height <= MaxArtworkDimension)
         {
-            result = normalized;
+            result = WithArtworkMetadata(normalized, sourceBytes.Length, sourceSha256);
         }
         else
         {
@@ -1237,18 +1237,20 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
                 result = new Dictionary<string, object?>(normalized, StringComparer.Ordinal)
                 {
                     ["dataBase64"] = Convert.ToBase64String(encoded),
-                    ["mediaType"] = "image/jpeg"
+                    ["mediaType"] = "image/jpeg",
+                    ["byteSize"] = encoded.Length,
+                    ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(encoded))
                 };
             }
         }
 
         lock (_artworkCacheGate)
         {
-            if (_artworkCache.Count >= MaxArtworkCacheEntries && !_artworkCache.ContainsKey(cacheKey))
+            if (_artworkCache.Count >= MaxArtworkCacheEntries && !_artworkCache.ContainsKey(sourceSha256))
             {
                 _artworkCache.Remove(_artworkCache.Keys.First());
             }
-            _artworkCache[cacheKey] = result;
+            _artworkCache[sourceSha256] = result;
         }
         return result;
     }
@@ -1299,11 +1301,25 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
     }
 
+    private static IReadOnlyDictionary<string, object?> WithArtworkMetadata(
+        IReadOnlyDictionary<string, object?> artwork,
+        int byteSize,
+        string sha256)
+    {
+        return new Dictionary<string, object?>(artwork, StringComparer.Ordinal)
+        {
+            ["byteSize"] = byteSize,
+            ["sha256"] = sha256
+        };
+    }
+
     private static IReadOnlyDictionary<string, object?> WithoutArtworkData(
         IReadOnlyDictionary<string, object?> artwork)
     {
         var result = new Dictionary<string, object?>(artwork, StringComparer.Ordinal);
         result.Remove("dataBase64");
+        result.Remove("byteSize");
+        result.Remove("sha256");
         return result;
     }
 

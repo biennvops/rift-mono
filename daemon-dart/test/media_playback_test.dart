@@ -444,26 +444,30 @@ void main() {
       () async {
         const peerDeviceId = 'rift-peer-device';
         configureMediaPlaybackPeer(peerDeviceId);
-        await daemon.handleMediaPlaybackProtocolMessageForTesting(
-          peerDeviceId,
-          {
-            'type': 'media.playbackPosted',
-            'payload': {
-              'playbackId': 'shared-playback',
-              'sourceDeviceId': peerDeviceId,
-              'appId': 'com.example.music',
-              'appName': 'Example Music',
-              'playbackState': 'playing',
-              'positionMs': 1000,
-              'updatedAt': '2026-07-16T10:00:00.000Z',
-              'canPlay': true,
-              'canPause': true,
-              'canSkipNext': true,
-              'canSkipPrevious': true,
-              'canSeek': true,
+        await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
+          'type': 'media.playbackPosted',
+          'payload': {
+            'playbackId': 'shared-playback',
+            'sourceDeviceId': peerDeviceId,
+            'appId': 'com.example.music',
+            'appName': 'Example Music',
+            'artwork': {
+              'mediaType': 'image/png',
+              'dataBase64': 'AQID',
+              'byteSize': 3,
+              'sha256':
+                  '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
             },
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'updatedAt': '2026-07-16T10:00:00.000Z',
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
           },
-        );
+        });
 
         final playback = await daemon.handleJsonRpcRequest({
           'method': 'rift.getMediaPlayback',
@@ -473,6 +477,13 @@ void main() {
           },
         });
         expect(playback['appName'], 'Example Music');
+        expect(playback['artwork'], {
+          'mediaType': 'image/png',
+          'dataBase64': 'AQID',
+          'byteSize': 3,
+          'sha256':
+              '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
+        });
 
         await daemon.handleMediaPlaybackProtocolMessageForTesting(
           peerDeviceId,

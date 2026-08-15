@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 import 'package:rift/screens/clipboard_transfer_screen.dart';
 import 'package:rift/src/file_transfer/send_queue_controller.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/platform/ios_clipboard.dart';
 import 'package:rift/src/platform/notification_route.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
+import 'package:rift/src/ui/activity_navigation.dart';
+import 'package:rift/src/ui/local_events_notifier.dart';
 
 import 'test_utils/fake_transport.dart';
 
@@ -296,7 +299,9 @@ void main() {
     Future<List<Map<String, String>>> Function()? pickSendFilesOverride,
     ValueNotifier<String?>? routeNotifier,
     ValueNotifier<String?>? sharedClipboardTextNotifier,
+    ValueNotifier<ActivityNavigationRequest?>? activityNavigationNotifier,
     bool preferDaemonOnlyOverride = true,
+    bool disableAnimations = false,
     bool? exportCompletedTransfersOverride,
     Future<void> Function(String path)? openFileOverride,
     Future<void> Function(String path)? exportFileOverride,
@@ -308,31 +313,39 @@ void main() {
     Future<void> Function(String text)? writeClipboardTextOverride,
   }) {
     return MaterialApp(
-      home: MultiProvider(
-        providers: [
-          Provider<JsonRpcRiftClient>.value(
-            value: client ?? FakeTransferJsonRpcClient(),
-          ),
-          ChangeNotifierProvider<SendQueueController>(
-            create: (context) => SendQueueController(
-              context.read<JsonRpcRiftClient>(),
-              preferDaemonOnlyOverride,
+      home: MediaQuery(
+        data: MediaQueryData(disableAnimations: disableAnimations),
+        child: MultiProvider(
+          providers: [
+            Provider<JsonRpcRiftClient>.value(
+              value: client ?? FakeTransferJsonRpcClient(),
             ),
+            ChangeNotifierProvider<SendQueueController>(
+              create: (context) => SendQueueController(
+                context.read<JsonRpcRiftClient>(),
+                preferDaemonOnlyOverride,
+              ),
+            ),
+            ChangeNotifierProvider<LocalEventsNotifier>(
+              create: (context) =>
+                  LocalEventsNotifier(context.read<JsonRpcRiftClient>()),
+            ),
+          ],
+          child: ClipboardTransferScreen(
+            revealCompletedTransfersInFolderOverride: revealInFolder,
+            exportCompletedTransfersOverride: exportCompletedTransfersOverride,
+            openFileOverride: openFileOverride,
+            exportFileOverride: exportFileOverride,
+            iosClipboardActionsOverride: iosClipboardActionsOverride,
+            readClipboardContentOverride: readClipboardContentOverride,
+            readClipboardTextOverride: readClipboardTextOverride,
+            writeClipboardContentOverride: writeClipboardContentOverride,
+            writeClipboardTextOverride: writeClipboardTextOverride,
+            pickSendFilesOverride: pickSendFilesOverride,
+            routeNotifier: routeNotifier,
+            sharedClipboardTextNotifier: sharedClipboardTextNotifier,
+            activityNavigationNotifier: activityNavigationNotifier,
           ),
-        ],
-        child: ClipboardTransferScreen(
-          revealCompletedTransfersInFolderOverride: revealInFolder,
-          exportCompletedTransfersOverride: exportCompletedTransfersOverride,
-          openFileOverride: openFileOverride,
-          exportFileOverride: exportFileOverride,
-          iosClipboardActionsOverride: iosClipboardActionsOverride,
-          readClipboardContentOverride: readClipboardContentOverride,
-          readClipboardTextOverride: readClipboardTextOverride,
-          writeClipboardContentOverride: writeClipboardContentOverride,
-          writeClipboardTextOverride: writeClipboardTextOverride,
-          pickSendFilesOverride: pickSendFilesOverride,
-          routeNotifier: routeNotifier,
-          sharedClipboardTextNotifier: sharedClipboardTextNotifier,
         ),
       ),
     );
@@ -351,6 +364,137 @@ void main() {
     expect(find.text('Notifications'), findsOneWidget);
   });
 
+  testWidgets('Activity swipe order follows the visible tab order',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildScreen());
+    await tester.pumpAndSettle();
+
+    final swipeArea = find.byKey(
+      const ValueKey('activity-section-swipe-area'),
+    );
+    const orderedSections = [
+      'clipboard',
+      'send',
+      'incomingOffers',
+      'transferActivity',
+      'notifications',
+    ];
+
+    for (var index = 0; index < orderedSections.length; index++) {
+      expect(
+        find.byKey(ValueKey('activity-tab-${orderedSections[index]}')),
+        findsOneWidget,
+      );
+      if (index == orderedSections.length - 1) continue;
+
+      await tester.drag(swipeArea, const Offset(-240, 0));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('activity-tab-${orderedSections[index + 1]}')),
+        findsOneWidget,
+      );
+    }
+
+    for (var index = orderedSections.length - 1; index > 0; index--) {
+      await tester.drag(swipeArea, const Offset(240, 0));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('activity-tab-${orderedSections[index - 1]}')),
+        findsOneWidget,
+      );
+    }
+  });
+
+  testWidgets('Activity subsection slides follow navigation direction',
+      (WidgetTester tester) async {
+    double horizontalOffset(ValueKey<String> key) {
+      final transition = find.ancestor(
+        of: find.byKey(key),
+        matching: find.byType(SlideTransition),
+      );
+      expect(transition, findsWidgets);
+      return tester.widget<SlideTransition>(transition.first).position.value.dx;
+    }
+
+    const clipboardKey = ValueKey<String>(
+      'history-section-content-clipboard',
+    );
+    const sendKey = ValueKey<String>('history-section-content-send');
+
+    await tester.pumpWidget(buildScreen());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('activity-tab-send')));
+    await tester.pump();
+
+    final forwardOutgoingStart = horizontalOffset(clipboardKey);
+    final forwardIncomingStart = horizontalOffset(sendKey);
+    expect(forwardOutgoingStart, closeTo(0, 0.0001));
+    expect(forwardIncomingStart, greaterThan(0));
+
+    await tester.pump(const Duration(milliseconds: 90));
+
+    expect(horizontalOffset(clipboardKey), lessThan(forwardOutgoingStart));
+    expect(
+        horizontalOffset(sendKey), inExclusiveRange(0, forwardIncomingStart));
+
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-tab-clipboard')));
+    await tester.pump();
+
+    final backwardOutgoingStart = horizontalOffset(sendKey);
+    final backwardIncomingStart = horizontalOffset(clipboardKey);
+    expect(backwardOutgoingStart, closeTo(0, 0.0001));
+    expect(backwardIncomingStart, lessThan(0));
+
+    await tester.pump(const Duration(milliseconds: 90));
+
+    expect(horizontalOffset(sendKey), greaterThan(backwardOutgoingStart));
+    expect(
+      horizontalOffset(clipboardKey),
+      inExclusiveRange(backwardIncomingStart, 0),
+    );
+  });
+
+  testWidgets('Activity reduced motion settles subsection changes immediately',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildScreen(disableAnimations: true));
+    await tester.pump();
+
+    await tester.tap(
+      find.byKey(const ValueKey('activity-tab-send')),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('history-section-content-send')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('history-section-content-clipboard')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Activity external route uses the same subsection transition',
+      (WidgetTester tester) async {
+    final routeNotifier = ValueNotifier<String?>(null);
+    await tester.pumpWidget(buildScreen(routeNotifier: routeNotifier));
+    await tester.pumpAndSettle();
+
+    routeNotifier.value = NotificationRoute.historyIncomingOffers;
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('history-section-content-incomingOffers')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-tab-incomingOffers')),
+      findsOneWidget,
+    );
+  });
   testWidgets('default Activity remains compact on a phone viewport',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(390, 600);
@@ -618,6 +762,402 @@ void main() {
     routeNotifier.value = NotificationRoute.historyIncomingOffers;
     await tester.pumpAndSettle();
     expect(find.text('Incoming Offers'), findsWidgets);
+  });
+
+  testWidgets('targeted clipboard Activity filters by exact device ID',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-first',
+          'sourceDeviceId': 'rift-first',
+          'contentType': 'text/plain',
+          'byteSize': 10,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+        {
+          'offerId': 'offer-second',
+          'sourceDeviceId': 'rift-second',
+          'contentType': 'text/plain',
+          'byteSize': 12,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-first',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+        {
+          'deviceId': 'rift-second',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historyClipboard,
+        deviceId: 'rift-second',
+        displayName: 'Pixel',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MultiProvider(
+          providers: [
+            Provider<JsonRpcRiftClient>.value(value: client),
+            ChangeNotifierProvider<SendQueueController>(
+              create: (_) => SendQueueController(client, false),
+            ),
+          ],
+          child: ClipboardTransferScreen(
+            activityNavigationNotifier: navigation,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-first')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-second')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+
+    final targetChip = tester.widget<InputChip>(
+      find.byKey(const ValueKey('activity-target-chip')),
+    );
+    targetChip.onDeleted!.call();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-first')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-second')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsNothing);
+  });
+  testWidgets('targeted transfer Activity filters and clears by device ID',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      transfers: const [
+        {
+          'transferId': 'transfer-first',
+          'peerDeviceId': 'rift-peer-1',
+          'fileName': 'first.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'bytesTransferred': 10,
+          'state': 'done',
+          'direction': 'outgoing',
+        },
+        {
+          'transferId': 'transfer-second',
+          'peerDeviceId': 'rift-peer-2',
+          'fileName': 'second.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 12,
+          'bytesTransferred': 12,
+          'state': 'done',
+          'direction': 'outgoing',
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel 9 Pro',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'MacBook Pro',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historyTransferActivity,
+        deviceId: 'rift-peer-2',
+        displayName: 'MacBook Pro',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('first.txt'), findsNothing);
+    expect(find.text('second.txt'), findsOneWidget);
+    final targetChip = tester.widget<InputChip>(
+      find.byKey(const ValueKey('activity-target-chip')),
+    );
+    targetChip.onDeleted!.call();
+    await tester.pumpAndSettle();
+
+    expect(find.text('first.txt'), findsOneWidget);
+    expect(find.text('second.txt'), findsOneWidget);
+    expect(find.text('All devices'), findsOneWidget);
+  });
+
+  testWidgets('targeted Send File prefers peer until the user changes it',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historySend,
+        deviceId: 'rift-peer-2',
+        displayName: 'Pixel',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    AnimatedContainer chip(String deviceId) => tester.widget<AnimatedContainer>(
+          find.byKey(ValueKey('send-device-chip-$deviceId')),
+        );
+    expect(
+        (chip('rift-peer-1').decoration as BoxDecoration).color, Colors.white);
+    expect((chip('rift-peer-2').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-1')));
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-2')));
+    await tester.pump();
+    await client.emitTrustChanged(const <String, dynamic>{});
+    await tester.pumpAndSettle();
+
+    expect((chip('rift-peer-1').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+    expect(
+        (chip('rift-peer-2').decoration as BoxDecoration).color, Colors.white);
+  });
+
+  testWidgets('manual Send target override clears stale preferred target',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-a',
+          'displayName': 'Pixel A',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-b',
+          'displayName': 'Pixel B',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historySend,
+        deviceId: 'rift-peer-a',
+        displayName: 'Pixel A',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    AnimatedContainer chip(String deviceId) => tester.widget<AnimatedContainer>(
+          find.byKey(ValueKey('send-device-chip-$deviceId')),
+        );
+    expect((chip('rift-peer-a').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+    expect(
+        (chip('rift-peer-b').decoration as BoxDecoration).color, Colors.white);
+
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-b')));
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-a')));
+    await tester.pumpAndSettle();
+
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-peer-b',
+        'displayName': 'Pixel B',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['file.transfer'],
+      },
+    ];
+    await client.emitTrustChanged(const <String, dynamic>{});
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Target device is unavailable for file transfer.'),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('send-device-chip-rift-peer-a')),
+        findsNothing);
+    expect((chip('rift-peer-b').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+  });
+
+  testWidgets('target scope indicator hides on unsupported Activity sections',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historyClipboard,
+        deviceId: 'rift-peer-1',
+        displayName: 'Pixel 9 Pro',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Activity — Pixel 9 Pro'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+
+    await tester.tap(find.text('Incoming Offers'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity — Pixel 9 Pro'), findsNothing);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsNothing);
+
+    await tester.tap(find.text('Notifications'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity — Pixel 9 Pro'), findsNothing);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsNothing);
+
+    await tester.tap(find.text('Transfer Activity'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity — Pixel 9 Pro'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+  });
+
+  testWidgets('targeted Send File disables sending when its peer disappears',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-targeted',
+          'status': 'queued',
+          'targetDeviceId': null,
+          'localPath': '/tmp/demo-targeted.txt',
+          'fileName': 'demo-targeted.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historySend,
+        deviceId: 'rift-peer-2',
+        displayName: 'Pixel',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-peer-1',
+        'displayName': 'Pixel',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['file.transfer'],
+      },
+    ];
+    await client.emitTrustChanged(const <String, dynamic>{});
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Target device is unavailable for file transfer.'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('send-device-chip-rift-peer-1')),
+      findsOneWidget,
+    );
+    final sendButton = tester.widget<FilledButton>(
+      find.ancestor(
+        of: find.text('Select a device'),
+        matching: find.byType(FilledButton),
+      ),
+    );
+    expect(sendButton.onPressed, isNull);
   });
 
   testWidgets('clipboard draft editor stays hidden until shared text arrives',

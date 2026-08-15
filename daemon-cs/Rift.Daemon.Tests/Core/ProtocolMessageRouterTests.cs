@@ -647,7 +647,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleMessageAsync_MediaPlaybackArtwork_PreservesStringValues()
+    public async Task HandleMessageAsync_MediaPlaybackArtwork_PreservesMetadata()
     {
         const string peerDeviceId = "rift-peer-media-artwork";
 
@@ -664,7 +664,9 @@ public sealed class ProtocolMessageRouterTests : IDisposable
                 {
                     dataBase64 = "aW1hZ2U=",
                     mediaType = "image/jpeg",
-                    uri = "file:///tmp/artwork.jpg"
+                    uri = "file:///tmp/artwork.jpg",
+                    byteSize = 5,
+                    sha256 = "6105d6cc76af400325e94d588ce511be5bfdbb73b437dc51eca43917d7a43e3d"
                 },
                 playbackState = "playing",
                 positionMs = 1000,
@@ -686,7 +688,10 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         Assert.Equal("aW1hZ2U=", playback.Artwork!["dataBase64"]);
         Assert.Equal("image/jpeg", playback.Artwork["mediaType"]);
         Assert.Equal("file:///tmp/artwork.jpg", playback.Artwork["uri"]);
-        Assert.All(playback.Artwork.Values, value => Assert.IsType<string>(value));
+        Assert.Equal(5, playback.Artwork["byteSize"]);
+        Assert.Equal(
+            "6105d6cc76af400325e94d588ce511be5bfdbb73b437dc51eca43917d7a43e3d",
+            playback.Artwork["sha256"]);
     }
 
     [Fact]

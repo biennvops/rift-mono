@@ -244,7 +244,7 @@ void main() {
 
     verify(() => mockClient.startPairingByEndpoint('10.53.38.174', 9140))
         .called(1);
-    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Pair devices'), findsOneWidget);
     expect(find.text('Confirm Pairing'), findsNothing);
     expect(
       find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),

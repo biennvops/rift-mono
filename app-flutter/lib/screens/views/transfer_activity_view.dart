@@ -9,17 +9,23 @@ import 'package:provider/provider.dart';
 import '../../src/ipc/json_rpc_client.dart';
 
 class TransferActivityView extends StatefulWidget {
+  final String? preferredDeviceId;
+  final int? targetRequestVersion;
   final bool? revealCompletedTransfersInFolderOverride;
   final bool? exportCompletedTransfersOverride;
   final Future<void> Function(String path)? openFileOverride;
   final Future<void> Function(String path)? exportFileOverride;
+  final VoidCallback? onTargetScopeCleared;
 
   const TransferActivityView({
     super.key,
+    this.preferredDeviceId,
+    this.targetRequestVersion,
     this.revealCompletedTransfersInFolderOverride,
     this.exportCompletedTransfersOverride,
     this.openFileOverride,
     this.exportFileOverride,
+    this.onTargetScopeCleared,
   });
 
   @override
@@ -44,6 +50,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   @override
   void initState() {
     super.initState();
+    _applyPreferredDevice();
     final client = context.read<JsonRpcRiftClient>();
     _subscriptions
       ..add(client.onFileProgress.listen(_handleTransferEvent))
@@ -74,6 +81,18 @@ class _TransferActivityViewState extends State<TransferActivityView> {
     } else {
       _loadActivity();
     }
+  }
+
+  @override
+  void didUpdateWidget(TransferActivityView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion) {
+      _applyPreferredDevice();
+    }
+  }
+
+  void _applyPreferredDevice() {
+    _activityDeviceFilter = widget.preferredDeviceId;
   }
 
   @override
@@ -295,7 +314,9 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   }
 
   Widget _buildDeviceFilterMenu(ThemeData theme) {
-    final label = _activityDeviceFilter ?? 'All devices';
+    final label = _activityDeviceFilter == null
+        ? 'All devices'
+        : _peerLabel(_activityDeviceFilter);
 
     return MenuAnchor(
       style: MenuStyle(
@@ -396,7 +417,10 @@ class _TransferActivityViewState extends State<TransferActivityView> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         minimumSize: const Size(220, 40),
       ),
-      onPressed: () => setState(() => _activityDeviceFilter = value),
+      onPressed: () {
+        setState(() => _activityDeviceFilter = value);
+        widget.onTargetScopeCleared?.call();
+      },
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

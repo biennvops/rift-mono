@@ -14,6 +14,7 @@ import android.util.Base64
 import android.util.Log
 import io.flutter.plugin.common.EventChannel
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -297,9 +298,16 @@ class AndroidMediaSessionObserver(
         }
         val output = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.PNG, 90, output)
+        val bytes = output.toByteArray()
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString(separator = "") { byte ->
+                "%02x".format(byte.toInt() and 0xff)
+            }
         return mapOf(
             "mimeType" to "image/png",
-            "dataBase64" to Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP),
+            "dataBase64" to Base64.encodeToString(bytes, Base64.NO_WRAP),
+            "byteSize" to bytes.size,
+            "sha256" to digest,
         )
     }
 

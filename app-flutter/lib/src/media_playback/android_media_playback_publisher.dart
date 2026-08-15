@@ -4,6 +4,16 @@ import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/platform/android_media_playback.dart';
 import 'package:flutter/foundation.dart';
 
+@visibleForTesting
+Map<String, dynamic> normalizeAndroidMediaArtwork(Map<dynamic, dynamic> value) {
+  final normalized = Map<String, dynamic>.from(value);
+  final mimeType = normalized.remove('mimeType');
+  if (normalized['mediaType'] == null && mimeType != null) {
+    normalized['mediaType'] = mimeType;
+  }
+  return normalized;
+}
+
 /// Publishes local Android media sessions to the daemon so trusted peers can
 /// display and control them. Counterpart to [MacOSMediaPlaybackPublisher].
 class AndroidMediaPlaybackPublisher {
@@ -61,7 +71,7 @@ class AndroidMediaPlaybackPublisher {
       if (event['artist'] != null) 'artist': event['artist']?.toString(),
       if (event['album'] != null) 'album': event['album']?.toString(),
       if (event['artwork'] is Map)
-        'artwork': Map<String, dynamic>.from(event['artwork'] as Map),
+        'artwork': normalizeAndroidMediaArtwork(event['artwork'] as Map),
       if (event['playbackState'] != null)
         'playbackState': event['playbackState']?.toString(),
       if (event['positionMs'] is num)

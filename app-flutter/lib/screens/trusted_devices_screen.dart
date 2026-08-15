@@ -1,15 +1,40 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/media_playback/artwork_palette.dart';
+import '../src/media_playback/playback_presentation.dart';
 import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
 import '../src/ui/app_shell.dart';
+import '../src/ui/motion.dart';
 import '../src/platform/notification_route.dart';
 import '../widgets/bubble_background.dart';
+import '../widgets/device_hub/device_hub_view.dart';
+import '../widgets/device_hub/device_orbit_motion_state.dart';
+import '../widgets/device_hub/device_orbit_scene.dart';
+import '../widgets/device_hub/nearby_peer_focus.dart';
+import '../widgets/device_hub/orbit_peer_presentation.dart';
 import '../src/ui/theme.dart';
+
+class _PairingHandoffState {
+  _PairingHandoffState({
+    required this.deviceId,
+    required this.sourcePeer,
+    required this.previousTrustedPeers,
+    required this.sourceOrigin,
+  });
+
+  final String deviceId;
+  final Map<String, dynamic> sourcePeer;
+  final List<Map<String, dynamic>> previousTrustedPeers;
+  final OrbitPeerEntryOrigin? sourceOrigin;
+  bool sourceSettled = false;
+  bool animating = false;
+}
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -21,16 +46,47 @@ class TrustedDevicesScreen extends StatefulWidget {
 class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     with TickerProviderStateMixin {
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
+  static const Duration _pairingHandoffDuration = Duration(milliseconds: 850);
+  static const Duration _pairingHandoffModeDelay = Duration(milliseconds: 650);
+  static const Duration _pairingHandoffTimeout = Duration(seconds: 3);
   static final bool _enableContinuousDiscoveryAnimation =
+      !Platform.environment.containsKey('FLUTTER_TEST');
+  static final bool _enableContinuousOrbitAnimation =
       !Platform.environment.containsKey('FLUTTER_TEST');
 
   String? _localDeviceId;
   String? _selectedDeviceId;
-  Widget? _selectedPeerWidget;
+  String? _selectedNearbyDeviceId;
+  bool _isLocalDeviceFocused = false;
+  Map<String, dynamic>? _desktopPairingTarget;
+  OrbitPeerEntryOrigin? _desktopPairingSourceOrigin;
+  _PairingHandoffState? _pairingHandoff;
+  bool _suppressHubSceneTransition = false;
+  String? _recentlyPairedDeviceId;
+  DeviceHubMode _hubMode = DeviceHubMode.trusted;
+  final Set<String> _interactingOrbitPeers = <String>{};
+  bool _orbitHasKeyboardFocus = false;
+  bool _orbitMembershipTransitioning = false;
+  bool _reducedMotion = false;
   Map<String, dynamic>? _localDeviceInfo;
   bool _isDiscovering = false;
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
+  final Map<String, Map<String, dynamic>> _playbacksByKey =
+      <String, Map<String, dynamic>>{};
+  final Map<String, Map<String, dynamic>> _peerDeviceStatuses =
+      <String, Map<String, dynamic>>{};
+  final Set<String> _loadingPeerDeviceStatuses = <String>{};
+  final PlaybackArtworkCache _playbackArtworkCache = PlaybackArtworkCache();
+  final Map<String, MediaArtwork> _artworkByPlaybackKey =
+      <String, MediaArtwork>{};
+  final Map<String, int> _artworkGenerationByPlaybackKey = <String, int>{};
+  final Map<String, Color> _pendingAccentFallbackByPlaybackKey =
+      <String, Color>{};
+  final ArtworkAccentCache _artworkAccentCache = ArtworkAccentCache();
+  final List<({bool removed, Map<String, dynamic> playback})>
+      _playbackMutationsDuringLoad = [];
+  bool _isLoadingPlayback = false;
   String? _error;
   bool _isLoadingData = false;
   bool _reloadQueued = false;
@@ -50,14 +106,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
   StreamSubscription? _pairingCompleteSub;
+  StreamSubscription<Map<String, dynamic>>? _mediaPostedSub;
+  StreamSubscription<Map<String, dynamic>>? _mediaUpdatedSub;
+  StreamSubscription<Map<String, dynamic>>? _mediaRemovedSub;
+  StreamSubscription<Map<String, dynamic>>? _deviceStatusSub;
   StreamSubscription<bool>? _connectionSub;
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
   Timer? _presenceRefreshTimer;
   Timer? _nearbyHighlightTimer;
+  Timer? _pairingHandoffSourceTimer;
+  Timer? _pairingHandoffModeTimer;
+  Timer? _pairingHandoffFallbackTimer;
   late final AnimationController _pulseController;
   late final AnimationController _bubbleController;
   late final AnimationController _spinController;
+  late final AnimationController _orbitController;
 
   bool get _isRouteCurrent {
     final route = ModalRoute.of(context);
@@ -73,11 +137,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         AnimationController(vsync: this, duration: const Duration(seconds: 6));
     _spinController =
         AnimationController(vsync: this, duration: const Duration(seconds: 2));
+    _orbitController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 120),
+    );
     _mobileScrollController.addListener(_scheduleNearbyVisibilityCheck);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadData();
       _setupListeners();
+      _loadData();
+      _loadPlaybackState();
+      _syncOrbitAnimation();
     });
   }
 
@@ -86,10 +156,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _pulseController.dispose();
     _bubbleController.dispose();
     _spinController.dispose();
+    _orbitController.dispose();
     _reloadDebounce?.cancel();
     _fullReloadThrottle?.cancel();
     _presenceRefreshTimer?.cancel();
     _nearbyHighlightTimer?.cancel();
+    _pairingHandoffSourceTimer?.cancel();
+    _pairingHandoffModeTimer?.cancel();
+    _pairingHandoffFallbackTimer?.cancel();
     _nearbySectionFocusNode.dispose();
     _manualInputFocusNode.dispose();
     _manualInputController.dispose();
@@ -98,6 +172,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _peerLostSub?.cancel();
     _trustSub?.cancel();
     _pairingCompleteSub?.cancel();
+    _mediaPostedSub?.cancel();
+    _mediaUpdatedSub?.cancel();
+    _mediaRemovedSub?.cancel();
+    _deviceStatusSub?.cancel();
     _connectionSub?.cancel();
     super.dispose();
   }
@@ -109,9 +187,28 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _trustSub = client.onTrustChanged.listen(_handleTrustChanged);
     _pairingCompleteSub =
         client.onPairingComplete.listen(_handlePairingComplete);
+    _mediaPostedSub = client.onMediaPlaybackPosted.listen(_upsertPlayback);
+    _mediaUpdatedSub = client.onMediaPlaybackUpdated.listen(_upsertPlayback);
+    _mediaRemovedSub = client.onMediaPlaybackRemoved.listen(_removePlayback);
+    _deviceStatusSub =
+        client.onDeviceStatusUpdated.listen(_handleDeviceStatusUpdated);
     _connectionSub = client.onConnectionChanged.listen((isConnected) {
-      if (isConnected && mounted) {
+      if (!mounted) return;
+      if (isConnected) {
         _loadData();
+        _loadPlaybackState();
+      } else if (_playbacksByKey.isNotEmpty ||
+          _artworkByPlaybackKey.isNotEmpty ||
+          _peerDeviceStatuses.isNotEmpty) {
+        setState(() {
+          _playbacksByKey.clear();
+          _playbackArtworkCache.clear();
+          _artworkByPlaybackKey.clear();
+          _artworkGenerationByPlaybackKey.clear();
+          _pendingAccentFallbackByPlaybackKey.clear();
+          _peerDeviceStatuses.clear();
+          _loadingPeerDeviceStatuses.clear();
+        });
       }
     });
   }
@@ -206,13 +303,258 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
             .toList(growable: false);
       }
+      if (newState != 'trusted') {
+        _peerDeviceStatuses.remove(deviceId);
+        _loadingPeerDeviceStatuses.remove(deviceId);
+      }
     });
 
-    _scheduleFullReloadThrottled();
+    if (_pairingHandoff?.deviceId == deviceId && newState == 'trusted') {
+      _scheduleReload();
+    } else {
+      _scheduleFullReloadThrottled();
+    }
   }
 
   void _handlePairingComplete(Map<String, dynamic> event) {
     _scheduleFullReloadThrottled();
+  }
+
+  void _handleDeviceStatusUpdated(Map<String, dynamic> event) {
+    final deviceId = event['sourceDeviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty || !mounted) return;
+    final isTrusted = _trustedPeers.any(
+      (peer) =>
+          peer is Map &&
+          peer['deviceId']?.toString() == deviceId &&
+          peer['trustState']?.toString() == 'trusted',
+    );
+    if (!isTrusted) return;
+    setState(() {
+      _peerDeviceStatuses[deviceId] = Map<String, dynamic>.from(event);
+    });
+  }
+
+  void _loadPeerDeviceStatuses(Iterable<Map<String, dynamic>> peers) {
+    for (final peer in peers) {
+      final deviceId = peer['deviceId']?.toString();
+      final capabilities = (peer['capabilities'] as List?)
+              ?.map((capability) => capability.toString())
+              .toSet() ??
+          const <String>{};
+      if (deviceId == null ||
+          deviceId.isEmpty ||
+          !capabilities.contains('device.status') ||
+          _peerDeviceStatuses.containsKey(deviceId) ||
+          !_loadingPeerDeviceStatuses.add(deviceId)) {
+        continue;
+      }
+      unawaited(_loadPeerDeviceStatus(deviceId));
+    }
+  }
+
+  Future<void> _loadPeerDeviceStatus(String deviceId) async {
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      final result = await client.getPeerDeviceStatus(deviceId);
+      if (!mounted || result is! Map) return;
+      setState(() {
+        _peerDeviceStatuses[deviceId] = Map<String, dynamic>.from(result);
+      });
+    } catch (_) {
+      // Presence remains useful when optional power telemetry is unavailable.
+    } finally {
+      _loadingPeerDeviceStatuses.remove(deviceId);
+    }
+  }
+
+  Future<void> _loadPlaybackState() async {
+    if (!mounted || _isLoadingPlayback) return;
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) return;
+
+    _isLoadingPlayback = true;
+    _playbackMutationsDuringLoad.clear();
+    try {
+      final result = await client.listMediaPlayback();
+      if (!mounted || !client.isConnected || result is! Map) return;
+      final loaded = <String, Map<String, dynamic>>{};
+      final artworkPayloads = <String, Object?>{};
+      for (final item in List<dynamic>.from(
+        result['playbacks'] ?? const <dynamic>[],
+      )) {
+        if (item is! Map) continue;
+        final playback = Map<String, dynamic>.from(item);
+        final key = mediaPlaybackKey(playback);
+        if (key == null) continue;
+        artworkPayloads[key] = playback.remove('artwork');
+        loaded[key] = playback;
+      }
+      for (final mutation in _playbackMutationsDuringLoad) {
+        final key = mediaPlaybackKey(mutation.playback);
+        if (key == null) continue;
+        artworkPayloads.remove(key);
+        if (mutation.removed) {
+          loaded.remove(key);
+        } else {
+          loaded[key] = mutation.playback;
+        }
+      }
+      _playbackArtworkCache.retainOnly(loaded.keys);
+      _artworkGenerationByPlaybackKey.removeWhere(
+        (key, _) => !loaded.containsKey(key),
+      );
+      setState(() {
+        _playbacksByKey
+          ..clear()
+          ..addAll(loaded);
+        _artworkByPlaybackKey.removeWhere(
+          (key, _) => !loaded.containsKey(key),
+        );
+        _pendingAccentFallbackByPlaybackKey.removeWhere(
+          (key, _) => !loaded.containsKey(key),
+        );
+      });
+      for (final entry in artworkPayloads.entries) {
+        _startPlaybackArtworkResolution(entry.key, entry.value);
+      }
+    } catch (_) {
+      // Device presentation remains usable when media state is unavailable.
+    } finally {
+      _isLoadingPlayback = false;
+      _playbackMutationsDuringLoad.clear();
+    }
+  }
+
+  void _upsertPlayback(Map<String, dynamic> event) {
+    final playback = Map<String, dynamic>.from(event);
+    final key = mediaPlaybackKey(playback);
+    if (key == null || !mounted) return;
+    final artworkPayload = playback.remove('artwork');
+    if (_isLoadingPlayback) {
+      _playbackMutationsDuringLoad.add((removed: false, playback: playback));
+    }
+    final sourceDeviceId = playback['sourceDeviceId']?.toString() ?? '';
+    final previousDeviceAccent =
+        _mediaPlaybackForDevice(sourceDeviceId)?.accentColor;
+    setState(() {
+      _playbacksByKey[key] = playback;
+    });
+    _startPlaybackArtworkResolution(
+      key,
+      artworkPayload,
+      fallbackAccent: previousDeviceAccent,
+    );
+  }
+
+  void _startPlaybackArtworkResolution(
+    String playbackKey,
+    Object? artworkPayload, {
+    Color? fallbackAccent,
+  }) {
+    final generation = (_artworkGenerationByPlaybackKey[playbackKey] ?? 0) + 1;
+    _artworkGenerationByPlaybackKey[playbackKey] = generation;
+    unawaited(
+      _applyPlaybackArtwork(
+        playbackKey,
+        artworkPayload,
+        generation,
+        fallbackAccent,
+      ),
+    );
+  }
+
+  Future<void> _applyPlaybackArtwork(
+    String playbackKey,
+    Object? artworkPayload,
+    int generation,
+    Color? fallbackAccent,
+  ) async {
+    final artwork =
+        await _playbackArtworkCache.resolve(playbackKey, artworkPayload);
+    if (!mounted ||
+        _artworkGenerationByPlaybackKey[playbackKey] != generation ||
+        !_playbacksByKey.containsKey(playbackKey)) {
+      return;
+    }
+
+    final resolvedAccent = artwork == null
+        ? null
+        : _artworkAccentCache.accentFor(artwork.identity);
+    setState(() {
+      if (artwork == null) {
+        _artworkByPlaybackKey.remove(playbackKey);
+        _pendingAccentFallbackByPlaybackKey.remove(playbackKey);
+      } else {
+        _artworkByPlaybackKey[playbackKey] = artwork;
+        if (resolvedAccent == null && fallbackAccent != null) {
+          _pendingAccentFallbackByPlaybackKey[playbackKey] = fallbackAccent;
+        } else {
+          _pendingAccentFallbackByPlaybackKey.remove(playbackKey);
+        }
+      }
+    });
+    if (artwork != null) unawaited(_resolveArtworkAccent(artwork));
+  }
+
+  void _removePlayback(Map<String, dynamic> event) {
+    final playback = Map<String, dynamic>.from(event);
+    final key = mediaPlaybackKey(playback);
+    if (key == null || !mounted) return;
+    if (_isLoadingPlayback) {
+      _playbackMutationsDuringLoad.add((removed: true, playback: playback));
+    }
+    _artworkGenerationByPlaybackKey.remove(key);
+    _playbackArtworkCache.remove(key);
+    if (_playbacksByKey.containsKey(key) ||
+        _artworkByPlaybackKey.containsKey(key) ||
+        _pendingAccentFallbackByPlaybackKey.containsKey(key)) {
+      setState(() {
+        _playbacksByKey.remove(key);
+        _artworkByPlaybackKey.remove(key);
+        _pendingAccentFallbackByPlaybackKey.remove(key);
+      });
+    }
+  }
+
+  Future<void> _resolveArtworkAccent(MediaArtwork artwork) async {
+    final previousAccent = _artworkAccentCache.accentFor(artwork.identity);
+    final accent = await _artworkAccentCache.resolve(artwork);
+    if (!mounted) return;
+    final visibleKeys = _artworkByPlaybackKey.entries
+        .where((entry) => entry.value.identity == artwork.identity)
+        .map((entry) => entry.key)
+        .toList(growable: false);
+    if (visibleKeys.isEmpty) return;
+    final hadFallback = visibleKeys.any(
+      _pendingAccentFallbackByPlaybackKey.containsKey,
+    );
+    if (hadFallback || accent != previousAccent) {
+      setState(() {
+        for (final key in visibleKeys) {
+          _pendingAccentFallbackByPlaybackKey.remove(key);
+        }
+      });
+    }
+  }
+
+  MediaPlaybackPresentation? _mediaPlaybackForDevice(String deviceId) {
+    final playback = selectCurrentPlaybackForDevice(
+      _playbacksByKey.values,
+      deviceId,
+    );
+    if (playback == null) return null;
+    final key = mediaPlaybackKey(playback);
+    final artwork = key == null ? null : _artworkByPlaybackKey[key];
+    return MediaPlaybackPresentation.fromRecord(
+      playback,
+      artworkBytes: artwork?.bytes,
+      artworkIdentity: artwork?.identity,
+      accentColor: artwork == null
+          ? null
+          : (_artworkAccentCache.accentFor(artwork.identity) ??
+              (key == null ? null : _pendingAccentFallbackByPlaybackKey[key])),
+    );
   }
 
   void _syncPresenceRefreshLoop() {
@@ -243,10 +585,107 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _reducedMotion = RiftMotion.reducedMotionOf(context);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _syncPresenceRefreshLoop();
+      _syncPulseAnimation();
+      _syncOrbitAnimation();
     });
+  }
+
+  void _syncOrbitAnimation() {
+    if (!mounted) return;
+    final motionState = DeviceOrbitMotionState(
+      reducedMotion: _reducedMotion,
+      hasFocusedPeer: _isLocalDeviceFocused ||
+          _selectedDeviceId != null ||
+          _selectedNearbyDeviceId != null ||
+          _desktopPairingTarget != null ||
+          _pairingHandoff != null,
+      hasKeyboardFocus: _orbitHasKeyboardFocus,
+      interactingPeerCount: _interactingOrbitPeers.length,
+      membershipTransitioning: _orbitMembershipTransitioning,
+    );
+    final shouldAnimate =
+        _enableContinuousOrbitAnimation && !motionState.isPaused;
+    if (shouldAnimate) {
+      if (!_orbitController.isAnimating) {
+        _orbitController.repeat();
+      }
+    } else {
+      _orbitController.stop();
+    }
+  }
+
+  void _handleOrbitPeerInteraction(String deviceId, bool interacting) {
+    if (interacting) {
+      _interactingOrbitPeers.add(deviceId);
+    } else {
+      _interactingOrbitPeers.remove(deviceId);
+    }
+    _syncOrbitAnimation();
+  }
+
+  void _handleOrbitFocusChanged(bool focused) {
+    _orbitHasKeyboardFocus = focused;
+    _syncOrbitAnimation();
+  }
+
+  void _handleOrbitMembershipTransitionChanged(bool transitioning) {
+    _orbitMembershipTransitioning = transitioning;
+    _syncOrbitAnimation();
+    final handoff = _pairingHandoff;
+    if (!transitioning && handoff?.animating == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _pairingHandoff != handoff) return;
+        _finishPairingHandoff(handoff!);
+      });
+    }
+  }
+
+  void _setHubMode(DeviceHubMode mode) {
+    if (_hubMode == mode ||
+        _desktopPairingTarget != null ||
+        _pairingHandoff != null) {
+      return;
+    }
+    setState(() {
+      _hubMode = mode;
+      _suppressHubSceneTransition = false;
+      _isLocalDeviceFocused = false;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+      _orbitMembershipTransitioning = false;
+    });
+    _syncOrbitAnimation();
+  }
+
+  void _focusLocalDevice() {
+    if (_localDeviceInfo == null) return;
+    setState(() {
+      _isLocalDeviceFocused = true;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
+  }
+
+  void _closePeerFocus() {
+    setState(() {
+      _isLocalDeviceFocused = false;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _desktopPairingTarget = null;
+      _desktopPairingSourceOrigin = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
   }
 
   Future<void> _loadData() async {
@@ -261,14 +700,26 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _isLoadingData = true;
 
       if (!client.isConnected) {
+        _cancelPairingHandoffTimers();
         setState(() {
           _trustedPeers = [];
           _discoveredPeers = [];
           _localDeviceInfo = null;
+          _isLocalDeviceFocused = false;
+          _selectedDeviceId = null;
+          _selectedNearbyDeviceId = null;
+          _desktopPairingTarget = null;
+          _desktopPairingSourceOrigin = null;
+          _pairingHandoff = null;
+          _suppressHubSceneTransition = false;
+          _recentlyPairedDeviceId = null;
+          _peerDeviceStatuses.clear();
+          _loadingPeerDeviceStatuses.clear();
           _isDiscovering = false;
           _error = 'Daemon not connected';
         });
         _syncPulseAnimation();
+        _syncOrbitAnimation();
         _syncPresenceRefreshLoop();
         return;
       }
@@ -290,6 +741,21 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         discoveredPeers: rawDiscoveredPeers,
       );
       final isDiscovering = discoveredResult['isDiscovering'] == true;
+      final trustedPeerMaps = trustedPeers
+          .whereType<Map>()
+          .where((peer) => peer['trustState']?.toString() == 'trusted')
+          .map(Map<String, dynamic>.from)
+          .toList(growable: false);
+      final trustedDeviceIds = trustedPeerMaps
+          .map((peer) => peer['deviceId']?.toString())
+          .whereType<String>()
+          .toSet();
+      final embeddedStatuses = <String, Map<String, dynamic>>{
+        for (final peer in trustedPeerMaps)
+          if (peer['deviceId'] is String && peer['deviceStatus'] is Map)
+            peer['deviceId'] as String:
+                Map<String, dynamic>.from(peer['deviceStatus'] as Map),
+      };
 
       if (mounted) {
         setState(() {
@@ -297,53 +763,33 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _localDeviceInfo = Map<String, dynamic>.from(deviceInfo);
           _trustedPeers = trustedPeers;
           _discoveredPeers = discoveredPeers;
+          _peerDeviceStatuses
+            ..removeWhere((deviceId, _) => !trustedDeviceIds.contains(deviceId))
+            ..addAll(embeddedStatuses);
+          _loadingPeerDeviceStatuses
+              .removeWhere((deviceId) => !trustedDeviceIds.contains(deviceId));
           _isDiscovering = isDiscovering;
           _error = null;
 
-          if (_selectedDeviceId != null) {
-            if (_selectedDeviceId == 'self' ||
-                _selectedDeviceId == localDeviceId) {
-              _selectedPeerWidget = DeviceDetailScreen(
-                key: ValueKey(_selectedDeviceId!),
-                peer: Map<String, dynamic>.from(deviceInfo),
-                isOnline: true,
-                isSelf: true,
-                onClose: () {
-                  setState(() {
-                    _selectedDeviceId = null;
-                    _selectedPeerWidget = null;
-                  });
-                  _loadData();
-                },
-              );
-            } else {
-              final foundPeer = trustedPeers.firstWhere(
-                (p) =>
-                    p is Map && p['deviceId']?.toString() == _selectedDeviceId,
-                orElse: () => null,
-              );
-              if (foundPeer != null && foundPeer is Map<String, dynamic>) {
-                final trustState =
-                    foundPeer['trustState']?.toString() ?? 'trusted';
-                if (trustState == 'trusted') {
-                  _selectedPeerWidget = DeviceDetailScreen(
-                    key: ValueKey(_selectedDeviceId!),
-                    peer: foundPeer,
-                    isOnline: foundPeer['presence'] == 'online',
-                    onClose: () {
-                      setState(() {
-                        _selectedDeviceId = null;
-                        _selectedPeerWidget = null;
-                      });
-                      _loadData();
-                    },
-                  );
-                }
-              }
-            }
+          if (_selectedDeviceId != null &&
+              !trustedPeers.any((peer) =>
+                  peer is Map &&
+                  peer['deviceId']?.toString() == _selectedDeviceId &&
+                  peer['trustState']?.toString() == 'trusted')) {
+            _selectedDeviceId = null;
+          }
+          if (_desktopPairingTarget == null &&
+              _selectedNearbyDeviceId != null &&
+              !discoveredPeers.any((peer) =>
+                  peer is Map &&
+                  peer['deviceId']?.toString() == _selectedNearbyDeviceId)) {
+            _selectedNearbyDeviceId = null;
           }
         });
         _syncPulseAnimation();
+        _syncOrbitAnimation();
+        _loadPeerDeviceStatuses(trustedPeerMaps);
+        _maybeStartPairingHandoff();
       }
       if (!isDiscovering) {
         unawaited(_ensureTrustedPeerDiscovery(client));
@@ -706,35 +1152,42 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   ) async {
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
     final selfDeviceId = deviceInfo['deviceId']?.toString() ?? 'self';
-    final detailScreen = DeviceDetailScreen(
-      key: ValueKey(selfDeviceId),
-      peer: deviceInfo,
-      isOnline: true,
-      isSelf: true,
-      onClose: isDesktop
-          ? () {
-              setState(() {
-                _selectedDeviceId = null;
-                _selectedPeerWidget = null;
-              });
-              _loadData();
-            }
-          : null,
-    );
 
     if (isDesktop) {
-      setState(() {
-        _selectedDeviceId = selfDeviceId;
-        _selectedPeerWidget = detailScreen;
-      });
-    } else {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => detailScreen,
-        ),
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return Dialog(
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              width: 760,
+              height: MediaQuery.sizeOf(dialogContext).height * 0.82,
+              child: DeviceDetailScreen(
+                key: ValueKey(selfDeviceId),
+                peer: deviceInfo,
+                isOnline: true,
+                isSelf: true,
+                onClose: () => Navigator.of(dialogContext).pop(),
+              ),
+            ),
+          );
+        },
       );
-      await _loadData();
+      if (mounted) await _loadData();
+      return;
     }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => DeviceDetailScreen(
+          key: ValueKey(selfDeviceId),
+          peer: deviceInfo,
+          isOnline: true,
+          isSelf: true,
+        ),
+      ),
+    );
+    await _loadData();
   }
 
   Widget _buildPeerCardHtml(
@@ -770,7 +1223,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           trustState: trustState,
           titleText: titleText),
       borderRadius: BorderRadius.circular(8),
-      child: Container(
+      child: AnimatedContainer(
+        duration: RiftMotion.durationOf(context, RiftMotion.normal),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected
@@ -866,8 +1320,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                             size: 14, color: theme.colorScheme.tertiary),
                         const SizedBox(width: 4),
                         Text('PENDING',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.tertiary)),
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: theme.colorScheme.tertiary)),
                       ],
                     ),
                   ),
@@ -938,8 +1392,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color:
-                  theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(_platformIcon(peerPlatform),
@@ -958,8 +1411,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
                 Text('Local Network',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant)),
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
               ],
             ),
           ),
@@ -1061,6 +1514,264 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
+  void _showActivityForPeer({
+    required String route,
+    required String deviceId,
+    required String displayName,
+  }) {
+    context.findAncestorStateOfType<AppShellState>()?.showActivityForDevice(
+          route: route,
+          deviceId: deviceId,
+          displayName: displayName,
+        );
+  }
+
+  DeviceDetailScreen _buildLocalDeviceFocus() {
+    final deviceInfo = _localDeviceInfo!;
+    final deviceId = deviceInfo['deviceId']?.toString() ?? 'self';
+    return DeviceDetailScreen(
+      key: ValueKey('local-device-focus-$deviceId'),
+      peer: deviceInfo,
+      isOnline: true,
+      isSelf: true,
+      mediaPlayback: _mediaPlaybackForDevice(deviceId),
+      onClose: _closePeerFocus,
+    );
+  }
+
+  DeviceDetailScreen _buildTrustedPeerDetail({
+    required Map<String, dynamic> peer,
+    required bool isOnline,
+    required VoidCallback? onClose,
+  }) {
+    final deviceId = peer['deviceId']?.toString() ?? '';
+    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final canOpenActivity = onClose != null && deviceId.isNotEmpty;
+    return DeviceDetailScreen(
+      key: ValueKey(deviceId.isNotEmpty ? deviceId : displayName),
+      peer: peer,
+      isOnline: isOnline,
+      mediaPlayback: _mediaPlaybackForDevice(deviceId),
+      onClose: onClose,
+      onOpenClipboardActivity: canOpenActivity
+          ? () => _showActivityForPeer(
+                route: NotificationRoute.historyClipboard,
+                deviceId: deviceId,
+                displayName: displayName,
+              )
+          : null,
+      onSendFile: canOpenActivity
+          ? () => _showActivityForPeer(
+                route: NotificationRoute.historySend,
+                deviceId: deviceId,
+                displayName: displayName,
+              )
+          : null,
+      onViewTransferActivity: canOpenActivity
+          ? () => _showActivityForPeer(
+                route: NotificationRoute.historyTransferActivity,
+                deviceId: deviceId,
+                displayName: displayName,
+              )
+          : null,
+    );
+  }
+
+  void _beginDesktopPairing(
+    Map<String, dynamic> peer,
+    String displayName,
+  ) {
+    final target = Map<String, dynamic>.from(peer);
+    target['displayName'] = displayName;
+    final targetDeviceId = target['deviceId']?.toString();
+    final sourceOrigin = _orbitEntryOriginFor(
+      targetDeviceId,
+      _nearbyOrbitPeers,
+    );
+    _cancelPairingHandoffTimers();
+    setState(() {
+      _hubMode = DeviceHubMode.nearby;
+      _isLocalDeviceFocused = false;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = targetDeviceId;
+      _desktopPairingTarget = target;
+      _desktopPairingSourceOrigin = sourceOrigin;
+      _pairingHandoff = null;
+      _suppressHubSceneTransition = false;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
+  }
+
+  void _returnFromDesktopPairing() {
+    final targetDeviceId = _desktopPairingTarget?['deviceId']?.toString();
+    final remainsNearby = targetDeviceId != null &&
+        _nearbyOrbitPeers.any(
+          (peer) => peer['deviceId']?.toString() == targetDeviceId,
+        );
+    setState(() {
+      _desktopPairingTarget = null;
+      _desktopPairingSourceOrigin = null;
+      _selectedNearbyDeviceId = remainsNearby ? targetDeviceId : null;
+    });
+    _syncOrbitAnimation();
+  }
+
+  Future<void> _completeDesktopPairing(String deviceId) async {
+    final target = _desktopPairingTarget;
+    if (target == null || _pairingHandoff != null) return;
+
+    final sourcePeer = Map<String, dynamic>.from(target)
+      ..['deviceId'] = deviceId;
+    final previousTrustedPeers = _trustedOrbitPeers
+        .where((peer) => peer['deviceId']?.toString() != deviceId)
+        .map(Map<String, dynamic>.from)
+        .toList(growable: false);
+    var sourceOrigin = _desktopPairingSourceOrigin;
+    if (sourceOrigin == null) {
+      final nearbyPeers = _nearbyOrbitPeers
+          .where((peer) => peer['deviceId']?.toString() != deviceId)
+          .map(Map<String, dynamic>.from)
+          .toList()
+        ..add(sourcePeer);
+      sourceOrigin = _orbitEntryOriginFor(deviceId, nearbyPeers);
+    }
+    final handoff = _PairingHandoffState(
+      deviceId: deviceId,
+      sourcePeer: sourcePeer,
+      previousTrustedPeers: previousTrustedPeers,
+      sourceOrigin: sourceOrigin,
+    );
+
+    _cancelPairingHandoffTimers();
+    setState(() {
+      _desktopPairingTarget = null;
+      _desktopPairingSourceOrigin = null;
+      _pairingHandoff = handoff;
+      _recentlyPairedDeviceId = deviceId;
+      _isLocalDeviceFocused = false;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
+
+    _pairingHandoffSourceTimer = Timer(RiftMotion.fast, () {
+      final current = _pairingHandoff;
+      if (!mounted ||
+          current == null ||
+          current != handoff ||
+          current.animating) {
+        return;
+      }
+      setState(() {
+        current.sourceSettled = true;
+      });
+      _maybeStartPairingHandoff();
+    });
+    _pairingHandoffFallbackTimer = Timer(_pairingHandoffTimeout, () {
+      _finishPairingHandoffWithoutModel(handoff);
+    });
+    await _loadData();
+  }
+
+  OrbitPeerEntryOrigin? _orbitEntryOriginFor(
+    String? deviceId,
+    Iterable<Map<String, dynamic>> peers,
+  ) {
+    if (deviceId == null || deviceId.isEmpty) return null;
+    final deviceIds = peers
+        .map((peer) => peer['deviceId']?.toString() ?? '')
+        .toList(growable: false)
+      ..sort();
+    final index = deviceIds.indexOf(deviceId);
+    if (index < 0) return null;
+    return OrbitPeerEntryOrigin(
+      index: index,
+      peerCount: deviceIds.length,
+      phase: _orbitController.value,
+    );
+  }
+
+  void _maybeStartPairingHandoff() {
+    final handoff = _pairingHandoff;
+    if (handoff == null || handoff.animating || !handoff.sourceSettled) return;
+    final hasTrustedModel = _trustedOrbitPeers.any(
+      (peer) => peer['deviceId']?.toString() == handoff.deviceId,
+    );
+    if (!hasTrustedModel) return;
+
+    if (_reducedMotion) {
+      _finishPairingHandoff(handoff);
+      return;
+    }
+
+    setState(() {
+      handoff.animating = true;
+      _suppressHubSceneTransition = false;
+    });
+    _pairingHandoffFallbackTimer?.cancel();
+    _pairingHandoffFallbackTimer = Timer(
+      _pairingHandoffDuration + RiftMotion.slow,
+      () => _finishPairingHandoff(handoff),
+    );
+    _pairingHandoffModeTimer = Timer(_pairingHandoffModeDelay, () {
+      if (!mounted || _pairingHandoff != handoff || !handoff.animating) return;
+      setState(() {
+        _hubMode = DeviceHubMode.trusted;
+      });
+    });
+    _syncOrbitAnimation();
+  }
+
+  void _finishPairingHandoff(_PairingHandoffState handoff) {
+    if (!mounted || _pairingHandoff != handoff) return;
+    _cancelPairingHandoffTimers();
+    setState(() {
+      _pairingHandoff = null;
+      _hubMode = DeviceHubMode.trusted;
+      _isLocalDeviceFocused = false;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+      _orbitMembershipTransitioning = false;
+      _suppressHubSceneTransition = true;
+    });
+    _syncOrbitAnimation();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_suppressHubSceneTransition) return;
+      setState(() {
+        _suppressHubSceneTransition = false;
+      });
+    });
+  }
+
+  void _finishPairingHandoffWithoutModel(_PairingHandoffState handoff) {
+    if (!mounted || _pairingHandoff != handoff || handoff.animating) return;
+    _recentlyPairedDeviceId = null;
+    _finishPairingHandoff(handoff);
+    unawaited(_loadData());
+  }
+
+  void _cancelPairingHandoffTimers() {
+    _pairingHandoffSourceTimer?.cancel();
+    _pairingHandoffSourceTimer = null;
+    _pairingHandoffModeTimer?.cancel();
+    _pairingHandoffModeTimer = null;
+    _pairingHandoffFallbackTimer?.cancel();
+    _pairingHandoffFallbackTimer = null;
+  }
+
+  void _handleRecentlyPairedAnimationCompleted(String deviceId) {
+    if (!mounted || _recentlyPairedDeviceId != deviceId) return;
+    setState(() {
+      _recentlyPairedDeviceId = null;
+    });
+  }
+
   Future<void> _handlePeerAction({
     required Map<String, dynamic> peer,
     required bool isTrusted,
@@ -1095,12 +1806,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         if (deviceId == null && (address == null || port == null)) {
           return;
         }
+        if (MediaQuery.sizeOf(context).width >= 1024) {
+          _beginDesktopPairing(peer, titleText);
+          return;
+        }
         final targetId = deviceId ?? address ?? titleText;
         final pairingScreen = deviceId != null
             ? PairingScreen.forDiscoveredPeer(
                 key: ValueKey('pairing-$targetId'),
                 deviceId: deviceId,
                 displayName: titleText,
+                platform: peer['platform']?.toString(),
               )
             : PairingScreen.forEndpoint(
                 key: ValueKey('pairing-$targetId'),
@@ -1123,8 +1839,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           if (result == 'history') {
             final appShellState =
                 context.findAncestorStateOfType<AppShellState>();
-            appShellState
-                ?.showHistoryRoute(NotificationRoute.historyClipboard);
+            appShellState?.showHistoryRoute(NotificationRoute.historyClipboard);
           } else if (result == 'devices') {
             final appShellState =
                 context.findAncestorStateOfType<AppShellState>();
@@ -1147,47 +1862,41 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         final isOnline = peer['presence'] == 'online';
         final isDesktop = MediaQuery.of(context).size.width >= 1024;
         final targetId = deviceId ?? titleText;
-        final detailScreen = DeviceDetailScreen(
-          key: ValueKey(targetId),
-          peer: peer,
-          isOnline: isOnline,
-          onClose: isDesktop
-              ? () {
-                  setState(() {
-                    _selectedDeviceId = null;
-                    _selectedPeerWidget = null;
-                  });
-                  _loadData();
-                }
-              : null,
-        );
 
         if (isDesktop) {
           setState(() {
+            _hubMode = DeviceHubMode.trusted;
+            _isLocalDeviceFocused = false;
             _selectedDeviceId = targetId;
-            _selectedPeerWidget = detailScreen;
+            _selectedNearbyDeviceId = null;
           });
-        } else {
-          final detailResult =
-              await Navigator.of(context).push<Map<String, dynamic>>(
-            MaterialPageRoute<Map<String, dynamic>>(
-              builder: (_) => detailScreen,
-            ),
-          );
-          await _loadData();
-          if (!mounted || detailResult == null) {
-            return;
-          }
+          _syncOrbitAnimation();
+          return;
+        }
 
-          if (detailResult['action'] == 'forgotten' && deviceId != null) {
-            final forgottenDisplayName =
-                detailResult['displayName']?.toString() ?? titleText;
-            RiftSnackbar.show(
-              context: context,
-              message: '$forgottenDisplayName removed.',
-              type: RiftSnackbarType.info,
-            );
-          }
+        final detailResult =
+            await Navigator.of(context).push<Map<String, dynamic>>(
+          MaterialPageRoute<Map<String, dynamic>>(
+            builder: (_) => DeviceDetailScreen(
+              key: ValueKey(targetId),
+              peer: peer,
+              isOnline: isOnline,
+            ),
+          ),
+        );
+        await _loadData();
+        if (!mounted || detailResult == null) {
+          return;
+        }
+
+        if (detailResult['action'] == 'forgotten' && deviceId != null) {
+          final forgottenDisplayName =
+              detailResult['displayName']?.toString() ?? titleText;
+          RiftSnackbar.show(
+            context: context,
+            message: '$forgottenDisplayName removed.',
+            type: RiftSnackbarType.info,
+          );
         }
       }
     } catch (e) {
@@ -1411,10 +2120,575 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
+  List<Map<String, dynamic>> get _trustedOrbitPeers => _trustedPeers
+      .whereType<Map>()
+      .where((peer) => peer['trustState']?.toString() == 'trusted')
+      .map(Map<String, dynamic>.from)
+      .toList(growable: false);
+
+  List<Map<String, dynamic>> get _nearbyOrbitPeers {
+    final peers = _discoveredPeers
+        .whereType<Map>()
+        .map(Map<String, dynamic>.from)
+        .toList(growable: true);
+    final handoff = _pairingHandoff;
+    if (handoff != null &&
+        !handoff.animating &&
+        !peers.any(
+          (peer) => peer['deviceId']?.toString() == handoff.deviceId,
+        )) {
+      peers.add(Map<String, dynamic>.from(handoff.sourcePeer));
+    }
+    return peers;
+  }
+
+  String _displayNameFor(Map<String, dynamic> peer) {
+    final displayName = peer['displayName']?.toString().trim() ?? '';
+    if (displayName.isNotEmpty) return displayName;
+    final deviceId = peer['deviceId']?.toString() ?? '';
+    if (deviceId.isEmpty) return 'Unknown Device';
+    return deviceId.length > 18 ? '${deviceId.substring(0, 18)}…' : deviceId;
+  }
+
+  OrbitPeerPresentation _orbitPresentationFor(
+    Map<String, dynamic> peer, {
+    bool includeMedia = false,
+    OrbitPeerStatusKind? statusKind,
+  }) {
+    final deviceId = peer['deviceId']?.toString() ?? '';
+    final media = includeMedia ? _mediaPlaybackForDevice(deviceId) : null;
+    final resolvedStatusKind = statusKind ??
+        (peer['presence']?.toString() == 'online'
+            ? OrbitPeerStatusKind.trustedOnline
+            : OrbitPeerStatusKind.trustedOffline);
+    final status = _peerDeviceStatuses[deviceId] ??
+        (peer['deviceStatus'] is Map
+            ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
+            : null);
+    final batteryPercent = status?['batteryPercent'];
+    final powerStatus =
+        resolvedStatusKind == OrbitPeerStatusKind.trustedOnline &&
+                status?['isStale'] != true &&
+                status?['batteryPresent'] != false &&
+                batteryPercent is num
+            ? OrbitPeerPowerStatus(
+                batteryPercent: batteryPercent.toInt().clamp(0, 100).toInt(),
+                isCharging: status?['chargingState']?.toString() == 'charging',
+              )
+            : null;
+    return OrbitPeerPresentation(
+      deviceId: deviceId,
+      displayName: _displayNameFor(peer),
+      platform: peer['platform']?.toString() ?? 'unknown',
+      statusKind: resolvedStatusKind,
+      accentColor: media?.accentColor,
+      powerStatus: powerStatus,
+      activity: switch (media?.playbackState) {
+        null => OrbitPeerActivity.none,
+        'playing' => OrbitPeerActivity.mediaPlaying,
+        'buffering' => OrbitPeerActivity.mediaBuffering,
+        _ => OrbitPeerActivity.mediaPaused,
+      },
+      mediaTitle: media?.displayTitle,
+      mediaArtist:
+          media != null && media.artist.isNotEmpty ? media.artist : null,
+    );
+  }
+
+  Map<String, dynamic>? _peerWithId(
+    Iterable<Map<String, dynamic>> peers,
+    String? deviceId,
+  ) {
+    if (deviceId == null) return null;
+    for (final peer in peers) {
+      if (peer['deviceId']?.toString() == deviceId) return peer;
+    }
+    return null;
+  }
+
+  Widget _buildTrustedDesktopScene() {
+    final peers = _trustedOrbitPeers;
+    final selectedPeer = _peerWithId(peers, _selectedDeviceId);
+    final handoff = _pairingHandoff;
+    final pairingOrbitHandoff = handoff?.animating == true
+        ? PairingOrbitHandoff(
+            deviceId: handoff!.deviceId,
+            previousPeers: handoff.previousTrustedPeers
+                .map(
+                  (peer) => _orbitPresentationFor(
+                    peer,
+                    includeMedia: true,
+                  ),
+                )
+                .toList(growable: false),
+            sourceOrigin: handoff.sourceOrigin,
+            duration: _pairingHandoffDuration,
+          )
+        : null;
+    final duration = pairingOrbitHandoff == null
+        ? RiftMotion.durationOf(context, RiftMotion.normal)
+        : Duration.zero;
+    return AnimatedSwitcher(
+      duration: duration,
+      switchInCurve: RiftMotion.enter,
+      switchOutCurve: RiftMotion.exit,
+      transitionBuilder: _buildFocusTransition,
+      child: _isLocalDeviceFocused
+          ? KeyedSubtree(
+              key: const ValueKey('trusted-local-device-focus'),
+              child: _buildLocalDeviceFocus(),
+            )
+          : selectedPeer == null
+              ? DeviceOrbitScene(
+                  key: ValueKey(
+                    pairingOrbitHandoff == null
+                        ? 'trusted-orbit-overview'
+                        : 'pairing-handoff-orbit',
+                  ),
+                  localDisplayName:
+                      _localDeviceInfo?['displayName']?.toString() ??
+                          'This Device',
+                  localPlatform: _localDeviceInfo?['platform']?.toString() ??
+                      _localPlatform(),
+                  peers: peers
+                      .map((peer) =>
+                          _orbitPresentationFor(peer, includeMedia: true))
+                      .toList(growable: false),
+                  phase: _orbitController,
+                  scanProgress: _pulseController,
+                  peerKeyPrefix: 'trusted-orbit-peer',
+                  peerSemanticRole: 'trusted device',
+                  onPeerSelected: (peer) {
+                    setState(() {
+                      _isLocalDeviceFocused = false;
+                      _selectedDeviceId = peer.deviceId;
+                      _selectedNearbyDeviceId = null;
+                      _interactingOrbitPeers.clear();
+                      _orbitHasKeyboardFocus = false;
+                    });
+                    _syncOrbitAnimation();
+                  },
+                  onPeerInteractionChanged: _handleOrbitPeerInteraction,
+                  onSceneFocusChanged: _handleOrbitFocusChanged,
+                  onMembershipTransitionChanged:
+                      _handleOrbitMembershipTransitionChanged,
+                  pairingHandoff: pairingOrbitHandoff,
+                  onLocalDeviceTap:
+                      _localDeviceInfo == null ? null : _focusLocalDevice,
+                  animatePeerChanges: true,
+                  emptyMessage: 'No trusted devices yet.',
+                  recentlyPairedDeviceId: _recentlyPairedDeviceId,
+                  onRecentlyPairedAnimationCompleted:
+                      _handleRecentlyPairedAnimationCompleted,
+                )
+              : CallbackShortcuts(
+                  key: ValueKey(
+                    'trusted-peer-focus-${selectedPeer['deviceId']}',
+                  ),
+                  bindings: {
+                    const SingleActivator(LogicalKeyboardKey.escape):
+                        _closePeerFocus,
+                  },
+                  child: Focus(
+                    autofocus: true,
+                    child: _buildTrustedPeerDetail(
+                      peer: selectedPeer,
+                      isOnline:
+                          selectedPeer['presence']?.toString() == 'online',
+                      onClose: () {
+                        _closePeerFocus();
+                        unawaited(_loadData());
+                      },
+                    ),
+                  ),
+                ),
+    );
+  }
+
+  Widget _buildDesktopPairingScene(Map<String, dynamic> target) {
+    final deviceId = target['deviceId']?.toString();
+    final displayName = _displayNameFor(target);
+    final address = target['address']?.toString();
+    final port = (target['port'] as num?)?.toInt();
+    final targetKey = deviceId ?? '$address:$port';
+    final pairing = deviceId != null
+        ? PairingScreen.forDiscoveredPeer(
+            key: ValueKey('nearby-pairing-$targetKey'),
+            deviceId: deviceId,
+            displayName: displayName,
+            platform: target['platform']?.toString(),
+            onClose: _returnFromDesktopPairing,
+            onCompleted: (pairedDeviceId) =>
+                unawaited(_completeDesktopPairing(pairedDeviceId)),
+          )
+        : PairingScreen.forEndpoint(
+            key: ValueKey('nearby-pairing-$targetKey'),
+            address: address!,
+            port: port!,
+            displayName: displayName,
+            onClose: _returnFromDesktopPairing,
+            onCompleted: (pairedDeviceId) =>
+                unawaited(_completeDesktopPairing(pairedDeviceId)),
+          );
+    return KeyedSubtree(
+      key: ValueKey('nearby-pairing-focus-$targetKey'),
+      child: pairing,
+    );
+  }
+
+  Widget _buildNearbyDesktopScene() {
+    final peers = _nearbyOrbitPeers;
+    final selectedPeer = _peerWithId(peers, _selectedNearbyDeviceId);
+    final pairingTarget = _desktopPairingTarget;
+    final waitingForHandoff =
+        _pairingHandoff != null && !_pairingHandoff!.animating;
+    final duration = RiftMotion.durationOf(context, RiftMotion.normal);
+    return AnimatedSwitcher(
+      duration: duration,
+      switchInCurve: RiftMotion.enter,
+      switchOutCurve: RiftMotion.exit,
+      transitionBuilder: _buildFocusTransition,
+      child: pairingTarget != null
+          ? _buildDesktopPairingScene(pairingTarget)
+          : _isLocalDeviceFocused
+              ? KeyedSubtree(
+                  key: const ValueKey('nearby-local-device-focus'),
+                  child: _buildLocalDeviceFocus(),
+                )
+              : selectedPeer == null
+                  ? DeviceOrbitScene(
+                      key: ValueKey(
+                        waitingForHandoff
+                            ? 'pairing-handoff-orbit'
+                            : 'nearby-orbit-overview',
+                      ),
+                      localDisplayName:
+                          _localDeviceInfo?['displayName']?.toString() ??
+                              'This Device',
+                      localPlatform:
+                          _localDeviceInfo?['platform']?.toString() ??
+                              _localPlatform(),
+                      peers: peers
+                          .map(
+                            (peer) => _orbitPresentationFor(
+                              peer,
+                              statusKind: OrbitPeerStatusKind.nearby,
+                            ),
+                          )
+                          .toList(growable: false),
+                      phase: _orbitController,
+                      scanProgress: _pulseController,
+                      peerKeyPrefix: 'nearby-orbit-peer',
+                      peerSemanticRole: 'nearby device',
+                      onPeerSelected: (peer) {
+                        setState(() {
+                          _isLocalDeviceFocused = false;
+                          _selectedNearbyDeviceId = peer.deviceId;
+                          _selectedDeviceId = null;
+                          _interactingOrbitPeers.clear();
+                          _orbitHasKeyboardFocus = false;
+                        });
+                        _syncOrbitAnimation();
+                      },
+                      onPeerInteractionChanged: _handleOrbitPeerInteraction,
+                      onSceneFocusChanged: _handleOrbitFocusChanged,
+                      onMembershipTransitionChanged:
+                          _handleOrbitMembershipTransitionChanged,
+                      onLocalDeviceTap:
+                          _localDeviceInfo == null ? null : _focusLocalDevice,
+                      scanning: _isDiscovering,
+                      animatePeerChanges: true,
+                      recentlyPairedDeviceId:
+                          waitingForHandoff ? _recentlyPairedDeviceId : null,
+                      onRecentlyPairedAnimationCompleted:
+                          _handleRecentlyPairedAnimationCompleted,
+                      emptyMessage: _isDiscovering
+                          ? 'Looking for nearby devices…'
+                          : 'Discovery paused',
+                      emptyAction: _isDiscovering
+                          ? null
+                          : FilledButton.icon(
+                              key: const ValueKey('nearby-start-discovery'),
+                              onPressed: () => _toggleDiscovery(true),
+                              icon: const Icon(Icons.radar),
+                              label: const Text('Start Discovery'),
+                            ),
+                    )
+                  : CallbackShortcuts(
+                      key: ValueKey(
+                        'nearby-peer-focus-shortcuts-${selectedPeer['deviceId']}',
+                      ),
+                      bindings: {
+                        const SingleActivator(LogicalKeyboardKey.escape):
+                            _closePeerFocus,
+                      },
+                      child: Focus(
+                        autofocus: true,
+                        child: NearbyPeerFocus(
+                          deviceId: selectedPeer['deviceId']?.toString() ?? '',
+                          displayName: _displayNameFor(selectedPeer),
+                          platform:
+                              selectedPeer['platform']?.toString() ?? 'unknown',
+                          endpoint: _endpointFor(selectedPeer),
+                          onClose: _closePeerFocus,
+                          onPair: () => unawaited(
+                            _handlePeerAction(
+                              peer: selectedPeer,
+                              isTrusted: false,
+                              trustState: 'discovered',
+                              titleText: _displayNameFor(selectedPeer),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+    );
+  }
+
+  Widget _buildFocusTransition(Widget child, Animation<double> animation) {
+    return FadeTransition(
+      opacity: animation,
+      child: ScaleTransition(
+        scale: Tween<double>(begin: 0.985, end: 1).animate(animation),
+        child: child,
+      ),
+    );
+  }
+
+  String? _endpointFor(Map<String, dynamic> peer) {
+    final address = peer['address']?.toString();
+    if (address == null || address.isEmpty) return null;
+    final port = peer['port'];
+    return port is num ? '$address:${port.toInt()}' : address;
+  }
+
+  List<Widget> _buildDesktopHubActions() {
+    final actions = <Widget>[];
+    final pairingActive =
+        _desktopPairingTarget != null || _pairingHandoff != null;
+    if (_hubMode == DeviceHubMode.nearby) {
+      actions.add(
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _isDiscovering ? 'Scan on' : 'Scan off',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            Switch(
+              key: const ValueKey('desktop-discovery-switch'),
+              value: _isDiscovering,
+              onChanged: pairingActive ? null : _toggleDiscovery,
+            ),
+          ],
+        ),
+      );
+      actions.add(
+        OutlinedButton.icon(
+          key: const ValueKey('desktop-manual-connect'),
+          onPressed: pairingActive ? null : _showDesktopManualConnection,
+          icon: const Icon(Icons.add_link, size: 18),
+          label: const Text('Manual'),
+        ),
+      );
+    }
+
+    final managedCount = _trustedPeers.whereType<Map>().where((peer) {
+      final state = peer['trustState']?.toString();
+      return state == 'pairing_pending' || state == 'blocked';
+    }).length;
+    actions.add(
+      OutlinedButton.icon(
+        key: const ValueKey('desktop-device-management'),
+        onPressed: pairingActive ? null : _showDesktopDeviceManagement,
+        icon: const Icon(Icons.tune, size: 18),
+        label: Text(managedCount == 0 ? 'Manage' : 'Manage ($managedCount)'),
+      ),
+    );
+    return actions;
+  }
+
+  Future<void> _showDesktopManualConnection() async {
+    final shouldConnect = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Connect manually'),
+          content: SizedBox(
+            width: 420,
+            child: TextField(
+              key: const ValueKey('desktop-manual-device-address'),
+              controller: _manualInputController,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => Navigator.of(dialogContext).pop(true),
+              decoration: const InputDecoration(
+                labelText: 'IP address or hostname',
+                hintText: '192.168.1.50 or device.local',
+                helperText:
+                    'You will verify the device before it becomes trusted.',
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('desktop-manual-connect-button'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Connect'),
+            ),
+          ],
+        );
+      },
+    );
+    if (shouldConnect == true && mounted) {
+      await _pairManually();
+    }
+  }
+
+  Future<void> _showDesktopDeviceManagement() async {
+    final pending = _trustedPeers
+        .whereType<Map>()
+        .where((peer) => peer['trustState']?.toString() == 'pairing_pending')
+        .map(Map<String, dynamic>.from)
+        .toList(growable: false);
+    final blocked = _trustedPeers
+        .whereType<Map>()
+        .where((peer) => peer['trustState']?.toString() == 'blocked')
+        .map(Map<String, dynamic>.from)
+        .toList(growable: false);
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+        return AlertDialog(
+          title: const Text('Device management'),
+          content: SizedBox(
+            width: 480,
+            child: pending.isEmpty && blocked.isEmpty
+                ? const Text('No pending or blocked devices.')
+                : SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (pending.isNotEmpty) ...[
+                          Text('Pairing pending',
+                              style: theme.textTheme.titleSmall),
+                          const SizedBox(height: 6),
+                          for (final peer in pending)
+                            ListTile(
+                              leading: const Icon(Icons.hourglass_empty),
+                              title: Text(_displayNameFor(peer)),
+                              subtitle: const Text('Pairing pending'),
+                              trailing: TextButton(
+                                onPressed: () {
+                                  Navigator.of(dialogContext).pop();
+                                  unawaited(
+                                    _handlePeerAction(
+                                      peer: peer,
+                                      isTrusted: true,
+                                      trustState: 'pairing_pending',
+                                      titleText: _displayNameFor(peer),
+                                    ),
+                                  );
+                                },
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                        ],
+                        if (pending.isNotEmpty && blocked.isNotEmpty)
+                          const Divider(),
+                        if (blocked.isNotEmpty) ...[
+                          Text('Blocked', style: theme.textTheme.titleSmall),
+                          const SizedBox(height: 6),
+                          for (final peer in blocked)
+                            ListTile(
+                              leading: Icon(Icons.block,
+                                  color: theme.colorScheme.error),
+                              title: Text(_displayNameFor(peer)),
+                              subtitle: const Text('Blocked'),
+                              trailing: TextButton(
+                                onPressed: () {
+                                  Navigator.of(dialogContext).pop();
+                                  unawaited(
+                                    _handlePeerAction(
+                                      peer: peer,
+                                      isTrusted: true,
+                                      trustState: 'blocked',
+                                      titleText: _displayNameFor(peer),
+                                    ),
+                                  );
+                                },
+                                child: const Text('Unblock'),
+                              ),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget? _buildDesktopErrorBanner() {
+    final error = _error;
+    if (error == null) return null;
+    final theme = Theme.of(context);
+    return Container(
+      key: const ValueKey('device-hub-error'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, color: theme.colorScheme.error),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Daemon Error: $error')),
+          TextButton(onPressed: _loadData, child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopHub() {
+    final handoffActive = _pairingHandoff?.animating == true;
+    final trustedScene = _buildTrustedDesktopScene();
+    return DeviceHubView(
+      mode: _hubMode,
+      onModeChanged: _setHubMode,
+      modeSelectionEnabled:
+          _desktopPairingTarget == null && _pairingHandoff == null,
+      trustedScene: trustedScene,
+      nearbyScene: _buildNearbyDesktopScene(),
+      sceneOverride: handoffActive ? trustedScene : null,
+      sceneKey:
+          handoffActive ? const ValueKey('device-hub-scene-nearby') : null,
+      animateSceneChanges: !_suppressHubSceneTransition,
+      actions: _buildDesktopHubActions(),
+      banner: _buildDesktopErrorBanner(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    if (isDesktop) return _buildDesktopHub();
 
     final header = Wrap(
       alignment: WrapAlignment.spaceBetween,
@@ -1430,169 +2704,80 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             letterSpacing: -0.5,
           ),
         ),
-        if (isDesktop)
-          FilledButton.icon(
-            key: const ValueKey('find-device-header-action'),
-            onPressed: _showNearbyDevices,
-            icon: const Icon(Icons.radar, size: 18),
-            label: const Text('Find Device'),
-          ),
       ],
     );
 
-    if (!isDesktop) {
-      _scheduleNearbyVisibilityCheck();
-      final showFindDeviceAction = !_isNearbyVisible && !_showManualConnection;
-      return Scaffold(
-        backgroundColor: theme.colorScheme.surface,
-        floatingActionButton: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
-          child: showFindDeviceAction
-              ? FloatingActionButton.extended(
-                  key: const ValueKey('find-device-floating-action'),
-                  heroTag: 'find-device-mobile',
-                  onPressed: _showNearbyDevices,
-                  icon: const Icon(Icons.radar),
-                  label: const Text('Find Device'),
-                )
-              : const SizedBox.shrink(
-                  key: ValueKey('find-device-floating-action-hidden'),
-                ),
-        ),
-        body: RefreshIndicator(
-          onRefresh: _loadData,
-          child: SingleChildScrollView(
-            controller: _mobileScrollController,
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Padding(
-              padding: RiftDesign.padScreenMobile,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  header,
-                  const SizedBox(height: 16),
-                  if (_error != null)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color:
-                                theme.colorScheme.error.withValues(alpha: 0.5)),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.error_outline,
-                              color: theme.colorScheme.error),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Text('Daemon Error: $_error',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onErrorContainer)),
-                          ),
-                          TextButton(
-                            onPressed: _loadData,
-                            style: TextButton.styleFrom(
-                                foregroundColor: theme.colorScheme.error),
-                            child: const Text('Retry'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 800),
-                      child: _buildUnifiedLayout(theme, context),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
+    _scheduleNearbyVisibilityCheck();
+    final showFindDeviceAction = !_isNearbyVisible && !_showManualConnection;
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            flex: 5,
-            child: RefreshIndicator(
-              onRefresh: _loadData,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: Padding(
-                  padding: RiftDesign.padScreenDesktop,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      header,
-                      const SizedBox(height: 16),
-                      if (_error != null)
-                        Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(bottom: 16),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.errorContainer,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                                color: theme.colorScheme.error
-                                    .withValues(alpha: 0.5)),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.error_outline,
-                                  color: theme.colorScheme.error),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Text('Daemon Error: $_error',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                        color: theme
-                                            .colorScheme.onErrorContainer)),
-                              ),
-                              TextButton(
-                                onPressed: _loadData,
-                                style: TextButton.styleFrom(
-                                    foregroundColor: theme.colorScheme.error),
-                                child: const Text('Retry'),
-                              ),
-                            ],
-                          ),
+      floatingActionButton: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: showFindDeviceAction
+            ? FloatingActionButton.extended(
+                key: const ValueKey('find-device-floating-action'),
+                heroTag: 'find-device-mobile',
+                onPressed: _showNearbyDevices,
+                icon: const Icon(Icons.radar),
+                label: const Text('Find Device'),
+              )
+            : const SizedBox.shrink(
+                key: ValueKey('find-device-floating-action-hidden'),
+              ),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _loadData,
+        child: SingleChildScrollView(
+          controller: _mobileScrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Padding(
+            padding: RiftDesign.padScreenMobile,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                header,
+                const SizedBox(height: 16),
+                if (_error != null)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color:
+                              theme.colorScheme.error.withValues(alpha: 0.5)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.error_outline,
+                            color: theme.colorScheme.error),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Text('Daemon Error: $_error',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onErrorContainer)),
                         ),
-                      _buildUnifiedLayout(theme, context),
-                    ],
+                        TextButton(
+                          onPressed: _loadData,
+                          style: TextButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 800),
+                    child: _buildUnifiedLayout(theme, context),
                   ),
                 ),
-              ),
+              ],
             ),
           ),
-          Container(width: 1, color: theme.colorScheme.outlineVariant),
-          Expanded(
-            flex: 6,
-            child: _selectedPeerWidget ??
-                Container(
-                  color: Colors.white,
-                  child: Center(
-                      child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                        Icon(Icons.devices_outlined,
-                            size: 64, color: theme.colorScheme.outlineVariant),
-                        const SizedBox(height: 16),
-                        Text('Select a device to view details or pair.',
-                            style: theme.textTheme.bodyLarge
-                                ?.copyWith(color: theme.colorScheme.outline)),
-                      ])),
-                ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1817,7 +3002,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }
 
   void _syncPulseAnimation() {
-    if (_isDiscovering && _enableContinuousDiscoveryAnimation) {
+    if (_isDiscovering &&
+        _enableContinuousDiscoveryAnimation &&
+        !_reducedMotion) {
       if (!_pulseController.isAnimating) {
         _pulseController.repeat(reverse: true);
       }

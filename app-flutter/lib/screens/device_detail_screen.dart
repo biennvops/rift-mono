@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
+import '../src/media_playback/playback_presentation.dart';
+import '../widgets/device_focus/device_focus_view.dart';
 import '../widgets/rift_snackbar.dart';
 
 const _kSuccessColor = Color(0xFF047857);
@@ -14,14 +16,22 @@ class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
   final bool isOnline;
   final bool isSelf;
+  final MediaPlaybackPresentation? mediaPlayback;
+  final VoidCallback? onOpenClipboardActivity;
+  final VoidCallback? onSendFile;
+  final VoidCallback? onViewTransferActivity;
   final VoidCallback? onClose;
 
   const DeviceDetailScreen({
     this.onClose,
+    this.onOpenClipboardActivity,
+    this.onSendFile,
+    this.onViewTransferActivity,
     super.key,
     required this.peer,
     required this.isOnline,
     this.isSelf = false,
+    this.mediaPlayback,
   });
 
   @override
@@ -608,6 +618,36 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           return Scaffold(
             backgroundColor: theme.colorScheme.surface,
             body: _buildRemovedState(theme, displayName),
+          );
+        }
+
+        final useDesktopFocusView = widget.onClose != null &&
+            (widget.isSelf || peer['trustState']?.toString() == 'trusted');
+        if (useDesktopFocusView) {
+          final capabilities = (peer['capabilities'] as List?)
+                  ?.map((capability) => capability.toString())
+                  .toList(growable: false) ??
+              const <String>[];
+          return DeviceFocusView(
+            deviceId: deviceId,
+            displayName: displayName,
+            fingerprint: _formatFingerprint(fingerprint),
+            protocolVersion: protocolVersion,
+            platform: platform,
+            osVersion: osVersion,
+            pairedAt: pairedAt,
+            lastSeenAt: lastSeenAt,
+            capabilities: capabilities,
+            deviceStatus: deviceStatus,
+            mediaPlayback: widget.mediaPlayback,
+            isOnline: isOnline,
+            isSelf: widget.isSelf,
+            onClose: widget.onClose!,
+            onRevokeTrust: widget.isSelf ? null : _forgetPeer,
+            onCopy: _copyToClipboard,
+            onOpenClipboardActivity: widget.onOpenClipboardActivity,
+            onSendFile: widget.onSendFile,
+            onViewTransferActivity: widget.onViewTransferActivity,
           );
         }
 
