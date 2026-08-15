@@ -35,6 +35,7 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
             new PendingIncomingMediaPlaybackAction
             {
                 RequestId = Guid.NewGuid().ToString("D"),
+                OperationId = Guid.NewGuid().ToString("D"),
                 SourceDeviceId = "rift-source",
                 RequestingDeviceId = "rift-requester",
                 PlaybackId = "playback-1",
@@ -64,6 +65,7 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
             new PendingIncomingMediaPlaybackAction
             {
                 RequestId = Guid.NewGuid().ToString("D"),
+                OperationId = Guid.NewGuid().ToString("D"),
                 SourceDeviceId = "rift-source",
                 RequestingDeviceId = "rift-requester",
                 PlaybackId = "playback-1",
@@ -74,7 +76,70 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
 
         Assert.True(result.Success);
         var args = await File.ReadAllLinesAsync(argsPath);
-        Assert.Equal([frameworkPath, "seek", "12345000"], args);
+        Assert.Equal([frameworkPath, "seek", "12345000"], args.Take(3));
+    }
+
+    [Fact]
+    public async Task HandleActionAsync_SerializesAdapterCommands()
+    {
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sendCount = 0;
+        var service = new MacOSMediaPlaybackService(
+            new StubServiceProvider(),
+            NullLogger<MacOSMediaPlaybackService>.Instance,
+            async (command, _) =>
+            {
+                if (command[0] == "send")
+                {
+                    if (Interlocked.Increment(ref sendCount) == 1)
+                    {
+                        firstStarted.SetResult();
+                        await releaseFirst.Task;
+                    }
+                    else
+                    {
+                        secondStarted.SetResult();
+                    }
+                }
+                return new MacOSMediaPlaybackService.AdapterCommandResult(0, "null", string.Empty, false);
+            });
+
+        var first = service.HandleActionAsync(CreateAction("next"), CancellationToken.None);
+        await firstStarted.Task;
+        var second = service.HandleActionAsync(CreateAction("next"), CancellationToken.None);
+
+        Assert.False(secondStarted.Task.IsCompleted);
+        releaseFirst.SetResult();
+        await secondStarted.Task;
+        await Task.WhenAll(first, second);
+    }
+
+    [Fact]
+    public async Task HandleActionAsync_ReconcilesPlaybackImmediatelyAfterSuccess()
+    {
+        var syncService = new RecordingMediaPlaybackSyncService();
+        var commands = new List<string[]>();
+        var service = new MacOSMediaPlaybackService(
+            new StubServiceProvider(syncService),
+            NullLogger<MacOSMediaPlaybackService>.Instance,
+            (command, _) =>
+            {
+                commands.Add(command.ToArray());
+                var output = command[0] == "get"
+                    ? """{"bundleIdentifier":"com.apple.Music","playing":false,"title":"Track","elapsedTime":12.0,"duration":180.0}"""
+                    : string.Empty;
+                return Task.FromResult(new MacOSMediaPlaybackService.AdapterCommandResult(0, output, string.Empty, false));
+            });
+
+        var result = await service.HandleActionAsync(CreateAction("pause"), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains(commands, command => command.SequenceEqual(["get", "--now"]));
+        var publication = Assert.Single(syncService.LocalEvents);
+        Assert.Equal("posted", publication.EventType);
+        Assert.Equal("paused", publication.Playback.PlaybackState);
     }
 
     [Theory]
@@ -121,6 +186,16 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
             "music:track-1"));
     }
 
+    private static PendingIncomingMediaPlaybackAction CreateAction(string action) => new()
+    {
+        RequestId = Guid.NewGuid().ToString("D"),
+        OperationId = Guid.NewGuid().ToString("D"),
+        SourceDeviceId = "rift-source",
+        RequestingDeviceId = "rift-requester",
+        PlaybackId = "playback-1",
+        Action = action
+    };
+
     private async Task<string> CreateSuccessfulAdapterScriptAsync()
     {
         var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");
@@ -136,7 +211,7 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
         var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");
         await File.WriteAllTextAsync(
             scriptPath,
-            $"#!/usr/bin/perl\nuse strict;\nuse warnings;\nmy $path = q{{{argsPath}}};\nopen(my $fh, '>', $path) or die $!;\nforeach my $arg (@ARGV) {{ print $fh $arg . \"\\n\"; }}\nclose($fh);\nexit 0;\n");
+            $"#!/usr/bin/perl\nuse strict;\nuse warnings;\nmy $path = q{{{argsPath}}};\nopen(my $fh, '>>', $path) or die $!;\nforeach my $arg (@ARGV) {{ print $fh $arg . \"\\n\"; }}\nclose($fh);\nexit 0;\n");
         SetExecutable(scriptPath);
         return scriptPath;
     }
@@ -164,8 +239,61 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
         }
     }
 
-    private sealed class StubServiceProvider : IServiceProvider
+    private sealed class StubServiceProvider(object? service = null) : IServiceProvider
     {
-        public object? GetService(Type serviceType) => null;
+        public object? GetService(Type serviceType) =>
+            service is not null && serviceType.IsInstanceOfType(service) ? service : null;
+    }
+
+    private sealed class RecordingMediaPlaybackSyncService : IMediaPlaybackSyncService
+    {
+        public List<(string EventType, MediaPlaybackRecord Playback)> LocalEvents { get; } = [];
+
+        public Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(
+            string eventType,
+            MediaPlaybackRecord playback,
+            string? removedAt,
+            CancellationToken cancellationToken)
+        {
+            LocalEvents.Add((eventType, playback));
+            return Task.FromResult(new NotifyLocalMediaPlaybackEventResult { PlaybackId = playback.PlaybackId });
+        }
+
+        public Task PublishLocalPlaybackToPeerAsync(string peerDeviceId, MediaPlaybackRecord playback, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SendPeerErrorAsync(string peerDeviceId, string failureReason, string? refMessageId, string message, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task HandleMediaPlaybackActionResultAsync(MediaPlaybackActionResultRecord result, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(
+            string requestId,
+            bool success,
+            string? failureReason,
+            string? message,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

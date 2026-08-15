@@ -26,8 +26,9 @@ dotnet restore runners/dotnet/Rift.Conformance.Runner.csproj
 dotnet run --project runners/dotnet/Rift.Conformance.Runner.csproj --no-restore -- "$PWD"
 ```
 
-Both runners execute the shared notification-sync vectors, including malformed,
-oversized, hash-mismatched, and structurally invalid PNG metadata.
+Both runners execute the shared notification-sync vectors and media playback
+action-correlation vectors. The media vectors require exact `operationId`
+correlation so a late result cannot complete a newer same-action retry.
 
 ## Related Inputs
 

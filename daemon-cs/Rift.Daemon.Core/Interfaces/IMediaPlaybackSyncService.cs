@@ -52,6 +52,7 @@ public sealed class MediaPlaybackRemovedRecord
 
 public sealed class MediaPlaybackActionResultRecord
 {
+    public string OperationId { get; init; } = string.Empty;
     public string PlaybackId { get; init; } = string.Empty;
     public string SourceDeviceId { get; init; } = string.Empty;
     public string RequestingDeviceId { get; init; } = string.Empty;
@@ -63,6 +64,7 @@ public sealed class MediaPlaybackActionResultRecord
 
 public sealed class MediaPlaybackActionRequestRecord
 {
+    public string OperationId { get; init; } = string.Empty;
     public string PlaybackId { get; init; } = string.Empty;
     public string SourceDeviceId { get; init; } = string.Empty;
     public string RequestingDeviceId { get; init; } = string.Empty;
@@ -74,6 +76,7 @@ public sealed class MediaPlaybackActionRequestRecord
 public sealed class PendingIncomingMediaPlaybackAction
 {
     public string RequestId { get; init; } = string.Empty;
+    public string OperationId { get; init; } = string.Empty;
     public string PlaybackId { get; init; } = string.Empty;
     public string SourceDeviceId { get; init; } = string.Empty;
     public string RequestingDeviceId { get; init; } = string.Empty;

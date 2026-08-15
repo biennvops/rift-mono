@@ -33,6 +33,12 @@ class AndroidMediaSessionObserver(
         private const val tag = "RiftMediaObserver"
         private const val artworkMaxDimension = 256
         private const val missingSessionGraceMs = 4_000L
+
+        internal fun canPlay(actions: Long): Boolean =
+            actions and (PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PLAY_PAUSE) != 0L
+
+        internal fun canPause(actions: Long): Boolean =
+            actions and (PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE) != 0L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -251,8 +257,8 @@ class AndroidMediaSessionObserver(
             "appName" to appLabelFor(controller.packageName),
             "playbackState" to playbackState,
             "positionMs" to state.position.coerceAtLeast(0L),
-            "canPlay" to (actions and PlaybackState.ACTION_PLAY != 0L),
-            "canPause" to (actions and PlaybackState.ACTION_PAUSE != 0L),
+            "canPlay" to canPlay(actions),
+            "canPause" to canPause(actions),
             "canSkipNext" to (actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L),
             "canSkipPrevious" to (actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L),
             "canSeek" to (actions and PlaybackState.ACTION_SEEK_TO != 0L),

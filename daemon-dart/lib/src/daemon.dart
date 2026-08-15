@@ -698,6 +698,9 @@ class RiftDaemon {
   static final RegExp _rfc3339UtcTimestamp = RegExp(
     r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$',
   );
+  static final RegExp _uuidV4 = RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+  );
   static const Set<String> _failureReasons = {
     'PeerUnreachable',
     'PeerRejected',
@@ -1814,6 +1817,10 @@ class RiftDaemon {
 
     final actionKey = '$sourceDeviceId\n$playbackId\n$action';
     if (_pendingMediaPlaybackActionKeys.containsKey(actionKey)) {
+      RiftLog.debug(
+        '[MediaPlayback] Suppressed duplicate action sourceDeviceId=$sourceDeviceId '
+        'playbackId=$playbackId action=$action',
+      );
       throw const RiftException(
         -32010,
         'A matching playback action is pending',
@@ -1840,6 +1847,7 @@ class RiftDaemon {
     _pendingMediaPlaybackActions[operationId] = {
       'operationId': operationId,
       'sourceDeviceId': sourceDeviceId,
+      'requestingDeviceId': _identityManager!.deviceId,
       'playbackId': playbackId,
       'action': action,
       'actionKey': actionKey,
@@ -1854,6 +1862,11 @@ class RiftDaemon {
       OperationState.dispatched,
     );
 
+    RiftLog.debug(
+      '[MediaPlayback] Dispatching action operationId=$operationId '
+      'requestingDeviceId=${_identityManager!.deviceId} '
+      'sourceDeviceId=$sourceDeviceId playbackId=$playbackId action=$action',
+    );
     try {
       await _sessionManager!.sendMessage(sourceDeviceId, {
         'rift': '0.1-draft',
@@ -1863,6 +1876,7 @@ class RiftDaemon {
         'destinationDeviceId': sourceDeviceId,
         'operationId': operationId,
         'payload': {
+          'operationId': operationId,
           'playbackId': playbackId,
           'sourceDeviceId': sourceDeviceId,
           'requestingDeviceId': _identityManager!.deviceId,
@@ -1872,12 +1886,8 @@ class RiftDaemon {
         },
       });
     } catch (error) {
-      final pending = _pendingMediaPlaybackActions.remove(operationId);
+      final pending = _removePendingMediaPlaybackAction(operationId);
       if (pending != null) {
-        if (_pendingMediaPlaybackActionKeys[actionKey] == operationId) {
-          _pendingMediaPlaybackActionKeys.remove(actionKey);
-        }
-        _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
         _operationManager!.transitionOperation(
           operationId,
           OperationState.failed,
@@ -1896,22 +1906,47 @@ class RiftDaemon {
     };
   }
 
-  void _expirePendingMediaPlaybackAction(String operationId) {
+  Map<String, dynamic>? _removePendingMediaPlaybackAction(String operationId) {
     final pending = _pendingMediaPlaybackActions.remove(operationId);
-    _pendingMediaPlaybackActionTimers.remove(operationId);
+    _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
     if (pending == null) {
-      return;
+      return null;
     }
 
     final actionKey = pending['actionKey'] as String;
     if (_pendingMediaPlaybackActionKeys[actionKey] == operationId) {
       _pendingMediaPlaybackActionKeys.remove(actionKey);
     }
+    return pending;
+  }
+
+  void _expirePendingMediaPlaybackAction(String operationId) {
+    final pending = _removePendingMediaPlaybackAction(operationId);
+    if (pending == null) {
+      return;
+    }
+
     _operationManager?.transitionOperation(
       operationId,
       OperationState.expired,
       failureReason: 'Timeout',
     );
+    RiftLog.debug(
+      '[MediaPlayback] Action timed out operationId=$operationId '
+      'requestingDeviceId=${_identityManager?.deviceId} '
+      'sourceDeviceId=${pending['sourceDeviceId']} '
+      'playbackId=${pending['playbackId']} action=${pending['action']}',
+    );
+    _mediaPlaybackManager?.addActionResult({
+      'operationId': operationId,
+      'sourceDeviceId': pending['sourceDeviceId'],
+      'playbackId': pending['playbackId'],
+      'action': pending['action'],
+      'state': 'Failed',
+      'success': false,
+      'failureReason': 'Timeout',
+      'message': 'The remote media playback action timed out.',
+    });
   }
 
   Future<Map<String, dynamic>> _reportLocalMediaPlaybackActionHandled(
@@ -1940,6 +1975,14 @@ class RiftDaemon {
       );
     }
     _pendingIncomingMediaPlaybackActionTimers.remove(requestId)?.cancel();
+    RiftLog.debug(
+      '[MediaPlayback] Local handler completed '
+      'operationId=${pending['operationId']} requestId=$requestId '
+      'requestingDeviceId=${pending['requestingDeviceId']} '
+      'sourceDeviceId=${pending['sourceDeviceId']} '
+      'playbackId=${pending['playbackId']} action=${pending['action']} '
+      'success=$success',
+    );
     await _sendMediaPlaybackActionResult(
       pending,
       success: success,
@@ -2005,7 +2048,9 @@ class RiftDaemon {
       'type': 'media.playbackActionResult',
       'sourceDeviceId': _identityManager!.deviceId,
       'destinationDeviceId': requestingDeviceId,
+      'operationId': request['operationId'],
       'payload': {
+        'operationId': request['operationId'],
         'playbackId': request['playbackId'],
         'sourceDeviceId': _identityManager!.deviceId,
         'requestingDeviceId': requestingDeviceId,
@@ -2015,6 +2060,14 @@ class RiftDaemon {
         'message': ?message,
       },
     });
+    RiftLog.debug(
+      '[MediaPlayback] Action result sent '
+      'operationId=${request['operationId']} '
+      'requestingDeviceId=$requestingDeviceId '
+      'sourceDeviceId=${_identityManager!.deviceId} '
+      'playbackId=${request['playbackId']} action=${request['action']} '
+      'success=$success',
+    );
   }
 
   Future<void> _trySendMediaPlaybackActionResult(
@@ -2055,6 +2108,34 @@ class RiftDaemon {
         '[MediaPlayback] Failed to expire incoming action $requestId: $error',
       );
     }
+  }
+
+  String _requireMediaPlaybackOperationId(Map<String, dynamic> payload) {
+    final operationId = RpcUtils.requireStringParam(payload, 'operationId');
+    if (!_uuidV4.hasMatch(operationId)) {
+      throw ArgumentError.value(
+        operationId,
+        'operationId',
+        'must be a lowercase RFC 4122 UUIDv4',
+      );
+    }
+    return operationId;
+  }
+
+  String _requireMatchingMediaPlaybackOperationId(
+    Map<String, dynamic> envelope,
+    Map<String, dynamic> payload,
+    String messageType,
+  ) {
+    final envelopeOperationId = _requireMediaPlaybackOperationId(envelope);
+    final payloadOperationId = _requireMediaPlaybackOperationId(payload);
+    if (envelopeOperationId != payloadOperationId) {
+      throw RiftException(
+        -32010,
+        '$messageType envelope and payload operationId values do not match',
+      );
+    }
+    return payloadOperationId;
   }
 
   String? _optionalMediaPlaybackTimestamp(
@@ -2964,6 +3045,11 @@ class RiftDaemon {
     }
 
     if (type == 'media.playbackActionRequest') {
+      final operationId = _requireMatchingMediaPlaybackOperationId(
+        message.payload,
+        payload,
+        type,
+      );
       final sourceDeviceId = RpcUtils.requireStringParam(
         payload,
         'sourceDeviceId',
@@ -2997,6 +3083,7 @@ class RiftDaemon {
       );
       final request = <String, dynamic>{
         'requestId': requestId,
+        'operationId': operationId,
         'playbackId': playbackId,
         'sourceDeviceId': sourceDeviceId,
         'requestingDeviceId': requestingDeviceId,
@@ -3004,6 +3091,11 @@ class RiftDaemon {
         if (payload['positionMs'] is int) 'positionMs': payload['positionMs'],
         'requestedAt': ?requestedAt,
       };
+      RiftLog.debug(
+        '[MediaPlayback] Action received operationId=$operationId '
+        'requestingDeviceId=$requestingDeviceId '
+        'sourceDeviceId=$sourceDeviceId playbackId=$playbackId action=$action',
+      );
       final localPlayback = _mediaPlaybackManager!.getPlayback(
         sourceDeviceId,
         playbackId,
@@ -3042,6 +3134,11 @@ class RiftDaemon {
         mediaPlaybackActionTimeout,
         () => unawaited(_expireIncomingMediaPlaybackAction(requestId)),
       );
+      RiftLog.debug(
+        '[MediaPlayback] Local handler started operationId=$operationId '
+        'requestId=$requestId requestingDeviceId=$requestingDeviceId '
+        'sourceDeviceId=$sourceDeviceId playbackId=$playbackId action=$action',
+      );
       onIpcEvent?.call({
         'jsonrpc': '2.0',
         'method': 'rift.onMediaPlaybackActionRequest',
@@ -3068,6 +3165,11 @@ class RiftDaemon {
     }
 
     if (type == 'media.playbackActionResult') {
+      final operationId = _requireMatchingMediaPlaybackOperationId(
+        message.payload,
+        payload,
+        type,
+      );
       final requestingDeviceId = RpcUtils.requireStringParam(
         payload,
         'requestingDeviceId',
@@ -3106,18 +3208,33 @@ class RiftDaemon {
           'must be a string',
         );
       }
-      final actionKey = '$sourceDeviceId\n$playbackId\n$action';
-      final operationId = _pendingMediaPlaybackActionKeys.remove(actionKey);
-      final pending = operationId == null
-          ? null
-          : _pendingMediaPlaybackActions.remove(operationId);
-      if (operationId == null || pending == null) {
+      final pending = _pendingMediaPlaybackActions[operationId];
+      if (pending == null) {
         RiftLog.warn(
-          '[MediaPlayback] Dropping unmatched action result from ${message.peerDeviceId}',
+          '[MediaPlayback] Rejected stale result operationId=$operationId '
+          'requestingDeviceId=$requestingDeviceId '
+          'sourceDeviceId=$sourceDeviceId playbackId=$playbackId action=$action',
         );
-        return;
+        throw RiftException(
+          -32010,
+          'No pending media playback action exists for operationId $operationId',
+        );
       }
-      _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
+      if (pending['sourceDeviceId'] != sourceDeviceId ||
+          pending['requestingDeviceId'] != requestingDeviceId ||
+          pending['playbackId'] != playbackId ||
+          pending['action'] != action) {
+        RiftLog.warn(
+          '[MediaPlayback] Rejected mismatched result operationId=$operationId '
+          'requestingDeviceId=$requestingDeviceId '
+          'sourceDeviceId=$sourceDeviceId playbackId=$playbackId action=$action',
+        );
+        throw RiftException(
+          -32010,
+          'Media playback action result does not match operationId $operationId',
+        );
+      }
+      _removePendingMediaPlaybackAction(operationId);
       _operationManager!.transitionOperation(
         operationId,
         OperationState.active,
@@ -3129,6 +3246,12 @@ class RiftDaemon {
         details: payload['message'] is String
             ? {'message': payload['message']}
             : null,
+      );
+      RiftLog.debug(
+        '[MediaPlayback] Action result received operationId=$operationId '
+        'requestingDeviceId=$requestingDeviceId '
+        'sourceDeviceId=$sourceDeviceId playbackId=$playbackId action=$action '
+        'success=$success',
       );
       _mediaPlaybackManager!.addActionResult({
         'playbackId': playbackId,
@@ -3209,6 +3332,9 @@ class RiftDaemon {
       timer.cancel();
     }
     _pendingIncomingMediaPlaybackActionTimers.clear();
+    _pendingMediaPlaybackActions.clear();
+    _pendingMediaPlaybackActionKeys.clear();
+    _pendingIncomingMediaPlaybackActions.clear();
     for (final timer in _pendingNotificationActionTimers.values) {
       timer.cancel();
     }

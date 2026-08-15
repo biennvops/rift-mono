@@ -856,6 +856,8 @@ Requests a remote media playback action.
 
 **Params:** `sourceDeviceId` device ID string, `playbackId` string, `action` string, optional `positionMs` integer for `seek`.
 
+**Result:** `{ "operationId", "playbackId", "action", "state" }`. `operationId` is the exact peer operation identity later reported by `rift.onMediaPlaybackActionResult`.
+
 `sourceDeviceId` is required because `playbackId` is scoped to its source device on the peer protocol.
 
 #### `rift.reportLocalMediaPlaybackActionHandled`
@@ -1061,8 +1063,8 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onMediaPlaybackPosted` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback posted |
 | `rift.onMediaPlaybackUpdated` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback updated |
 | `rift.onMediaPlaybackRemoved` | `{ "playbackId", "sourceDeviceId", "removedAt?" }` | Mirrored playback removed |
-| `rift.onMediaPlaybackActionRequest` | `{ "requestId", "playbackId", "sourceDeviceId", "requestingDeviceId", "action", "positionMs?", "requestedAt?" }` | Local playback action requested by a peer |
-| `rift.onMediaPlaybackActionResult` | `{ "playbackId", "sourceDeviceId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote playback action result |
+| `rift.onMediaPlaybackActionRequest` | `{ "requestId", "operationId", "playbackId", "sourceDeviceId", "requestingDeviceId", "action", "positionMs?", "requestedAt?" }` | Local playback action requested by a peer |
+| `rift.onMediaPlaybackActionResult` | `{ "playbackId", "sourceDeviceId", "operationId", "action", "state", "success", "failureReason?", "message?" }` | Remote playback action result |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
 | `rift.onFileTransferReadyToCommit` | `{ "transferId", "operationId", "peerDeviceId", "fileName", "mediaType", "byteSize", "sha256", "stagingPath", "destinationPath", "state" }` | Verified incoming file awaits user-session publication |
 | `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |

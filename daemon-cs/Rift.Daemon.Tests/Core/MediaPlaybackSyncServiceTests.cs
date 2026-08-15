@@ -52,8 +52,10 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             CreatePlayback(_identityManager.GetDeviceId(), "playback-1", "Track"),
             CancellationToken.None);
 
+        var operationId = Guid.NewGuid().ToString("D");
         await service.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
         {
+            OperationId = operationId,
             PlaybackId = "playback-1",
             SourceDeviceId = _identityManager.GetDeviceId(),
             RequestingDeviceId = "rift-peer",
@@ -61,11 +63,15 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         }, CancellationToken.None);
 
         var handled = Assert.Single(localActionHandler.Requests);
+        Assert.Equal(operationId, handled.OperationId);
         Assert.Equal("playback-1", handled.PlaybackId);
         Assert.DoesNotContain(_ipcNotificationService.Events, evt => evt.Method == "rift.onMediaPlaybackActionRequest");
         var sent = Assert.Single(_transport.SentMessages);
         Assert.Equal("rift-peer", sent.PeerDeviceId);
         Assert.Equal("media.playbackActionResult", sent.Type);
+        var envelope = Assert.Single(_transport.Payloads);
+        Assert.Equal(operationId, envelope.GetProperty("operationId").GetString());
+        Assert.Equal(operationId, envelope.GetProperty("payload").GetProperty("operationId").GetString());
     }
 
     [Fact]
@@ -95,6 +101,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         await service.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
         {
+            OperationId = Guid.NewGuid().ToString("D"),
             PlaybackId = "playback-1",
             SourceDeviceId = _identityManager.GetDeviceId(),
             RequestingDeviceId = "rift-peer",
@@ -122,6 +129,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         await service.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
         {
+            OperationId = Guid.NewGuid().ToString("D"),
             PlaybackId = "missing",
             SourceDeviceId = _identityManager.GetDeviceId(),
             RequestingDeviceId = "rift-peer",
@@ -138,6 +146,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         }, CancellationToken.None);
         await service.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
         {
+            OperationId = Guid.NewGuid().ToString("D"),
             PlaybackId = "restricted",
             SourceDeviceId = _identityManager.GetDeviceId(),
             RequestingDeviceId = "rift-peer",
@@ -161,6 +170,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         await service.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
         {
+            OperationId = Guid.NewGuid().ToString("D"),
             PlaybackId = "playback-1",
             SourceDeviceId = _identityManager.GetDeviceId(),
             RequestingDeviceId = "rift-peer",
@@ -182,6 +192,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             CancellationToken.None);
         await service.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
         {
+            OperationId = Guid.NewGuid().ToString("D"),
             PlaybackId = "playback-1",
             SourceDeviceId = _identityManager.GetDeviceId(),
             RequestingDeviceId = "rift-peer",
@@ -211,6 +222,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         var rejected = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
         await service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
         {
+            OperationId = rejected.OperationId,
             PlaybackId = "playback-1",
             SourceDeviceId = peerDeviceId,
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -223,6 +235,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         var invalid = await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
             service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
             {
+                OperationId = pending.OperationId,
                 PlaybackId = "playback-1",
                 SourceDeviceId = peerDeviceId,
                 RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -233,6 +246,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         Assert.Equal(-32010, invalid.ErrorCode);
         await service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
         {
+            OperationId = pending.OperationId,
             PlaybackId = "playback-1",
             SourceDeviceId = peerDeviceId,
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -424,7 +438,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task PerformMediaPlaybackActionAsync_RejectsDuplicateAndExpiresLostResult()
+    public async Task PerformMediaPlaybackActionAsync_CorrelatesLateResultByOperationId()
     {
         const string peerDeviceId = "rift-peer";
         // Wide enough that the duplicate request below always lands inside the
@@ -436,6 +450,8 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         var first = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
         var actionRequest = Assert.Single(_transport.Payloads, payload =>
             payload.GetProperty("type").GetString() == "media.playbackActionRequest");
+        Assert.Equal(first.OperationId, actionRequest.GetProperty("operationId").GetString());
+        Assert.Equal(first.OperationId, actionRequest.GetProperty("payload").GetProperty("operationId").GetString());
         Assert.False(actionRequest.GetProperty("payload").TryGetProperty("positionMs", out _));
         var duplicate = await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
             service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None));
@@ -451,8 +467,21 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         Assert.Equal("Timeout", expired.FailureReason);
 
         var retry = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
+        await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
+            service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
+            {
+                OperationId = first.OperationId,
+                PlaybackId = "playback-1",
+                SourceDeviceId = peerDeviceId,
+                RequestingDeviceId = _identityManager.GetDeviceId(),
+                Action = "pause",
+                Success = true
+            }, CancellationToken.None));
+        Assert.Equal("Dispatched", _operationService.GetOperation(retry.OperationId).State);
+
         await service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
         {
+            OperationId = retry.OperationId,
             PlaybackId = "playback-1",
             SourceDeviceId = peerDeviceId,
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -460,6 +489,55 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             Success = true
         }, CancellationToken.None);
         Assert.Equal("Done", _operationService.GetOperation(retry.OperationId).State);
+    }
+
+    [Fact]
+    public async Task HandleMediaPlaybackActionResultAsync_RejectsMismatchedIdentityWithoutCompletingOperation()
+    {
+        const string peerDeviceId = "rift-peer";
+        var service = CreateService();
+        _presenceService.UpdatePeerPresence(peerDeviceId, "online", DateTimeOffset.UtcNow.ToString("O"), ["media.playback"]);
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback(peerDeviceId, "playback-1", "Track"), CancellationToken.None);
+        var pending = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
+
+        await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
+            service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
+            {
+                OperationId = pending.OperationId,
+                PlaybackId = "different-playback",
+                SourceDeviceId = peerDeviceId,
+                RequestingDeviceId = _identityManager.GetDeviceId(),
+                Action = "pause",
+                Success = true
+            }, CancellationToken.None));
+
+        Assert.Equal("Dispatched", _operationService.GetOperation(pending.OperationId).State);
+    }
+
+    [Fact]
+    public async Task HandleMediaPlaybackActionResultAsync_DoesNotUseDuplicateGuardForCorrelation()
+    {
+        const string peerDeviceId = "rift-peer";
+        var service = CreateService();
+        _presenceService.UpdatePeerPresence(peerDeviceId, "online", DateTimeOffset.UtcNow.ToString("O"), ["media.playback"]);
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback(peerDeviceId, "playback-1", "Track"), CancellationToken.None);
+        var pending = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
+
+        await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
+            service.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
+            {
+                OperationId = Guid.NewGuid().ToString("D"),
+                PlaybackId = "playback-1",
+                SourceDeviceId = peerDeviceId,
+                RequestingDeviceId = _identityManager.GetDeviceId(),
+                Action = "pause",
+                Success = true
+            }, CancellationToken.None));
+
+        Assert.Equal("Dispatched", _operationService.GetOperation(pending.OperationId).State);
+        var duplicate = await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
+            service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None));
+        Assert.Equal(-32010, duplicate.ErrorCode);
     }
 
     [Fact]
@@ -497,22 +575,22 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         string playbackId,
         string title,
         IReadOnlyDictionary<string, object?>? artwork = null) => new()
-    {
-        PlaybackId = playbackId,
-        SourceDeviceId = sourceDeviceId,
-        AppId = "com.example.music",
-        AppName = "Example Music",
-        Title = title,
-        Artwork = artwork,
-        PlaybackState = "playing",
-        PositionMs = 1000,
-        CanPlay = true,
-        CanPause = true,
-        CanSkipNext = true,
-        CanSkipPrevious = true,
-        CanSeek = true,
-        UpdatedAt = "2026-07-16T10:00:00Z"
-    };
+        {
+            PlaybackId = playbackId,
+            SourceDeviceId = sourceDeviceId,
+            AppId = "com.example.music",
+            AppName = "Example Music",
+            Title = title,
+            Artwork = artwork,
+            PlaybackState = "playing",
+            PositionMs = 1000,
+            CanPlay = true,
+            CanPause = true,
+            CanSkipNext = true,
+            CanSkipPrevious = true,
+            CanSeek = true,
+            UpdatedAt = "2026-07-16T10:00:00Z"
+        };
 
     public void Dispose()
     {

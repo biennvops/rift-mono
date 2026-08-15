@@ -12,11 +12,28 @@ internal sealed class MacOSMediaPlaybackService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan AdapterCommandTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan[] ActionReconciliationDelays =
+    [
+        TimeSpan.Zero,
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(250)
+    ];
 
     private readonly Lock _gate = new();
+    private readonly SemaphoreSlim _actionGate = new(1, 1);
+    private readonly Func<IReadOnlyList<string>, CancellationToken, Task<AdapterCommandResult>>? _adapterRunner;
     private SnapshotState? _current;
     private CancellationTokenSource? _stoppingCts;
     private Task? _runTask;
+
+    internal MacOSMediaPlaybackService(
+        IServiceProvider serviceProvider,
+        ILogger<MacOSMediaPlaybackService> logger,
+        Func<IReadOnlyList<string>, CancellationToken, Task<AdapterCommandResult>> adapterRunner)
+        : this(serviceProvider, logger)
+    {
+        _adapterRunner = adapterRunner;
+    }
 
     public void Start(CancellationToken cancellationToken)
     {
@@ -130,9 +147,37 @@ internal sealed class MacOSMediaPlaybackService(
             };
         }
 
-        var output = await RunAdapterAsync(command, cancellationToken).ConfigureAwait(false);
+        MacOSNowPlayingSnapshot? previousSnapshot;
+        lock (_gate)
+        {
+            previousSnapshot = _current?.Snapshot;
+        }
+
+        AdapterCommandResult output;
+        await _actionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            logger.LogDebug(
+                "Starting macOS media action {OperationId} requester {RequestingDeviceId} source {SourceDeviceId} playback {PlaybackId} action {Action}.",
+                request.OperationId,
+                request.RequestingDeviceId,
+                request.SourceDeviceId,
+                request.PlaybackId,
+                request.Action);
+            output = await RunAdapterAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _actionGate.Release();
+        }
+
         if (output.ExitCode != 0)
         {
+            logger.LogDebug(
+                "macOS media action {OperationId} failed for playback {PlaybackId} action {Action}.",
+                request.OperationId,
+                request.PlaybackId,
+                request.Action);
             return new LocalMediaPlaybackActionResult
             {
                 Success = false,
@@ -141,8 +186,77 @@ internal sealed class MacOSMediaPlaybackService(
             };
         }
 
+        logger.LogDebug(
+            "Completed macOS media action {OperationId} for playback {PlaybackId} action {Action}.",
+            request.OperationId,
+            request.PlaybackId,
+            request.Action);
+        try
+        {
+            await ReconcileAfterSuccessfulActionAsync(request, previousSnapshot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "Failed to reconcile macOS playback after action {OperationId} on {PlaybackId}.",
+                request.OperationId,
+                request.PlaybackId);
+        }
+
         return new LocalMediaPlaybackActionResult { Success = true };
     }
+
+    private async Task ReconcileAfterSuccessfulActionAsync(
+        PendingIncomingMediaPlaybackAction request,
+        MacOSNowPlayingSnapshot? previousSnapshot,
+        CancellationToken cancellationToken)
+    {
+        using var reconciliationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        reconciliationCts.CancelAfter(TimeSpan.FromMilliseconds(750));
+
+        foreach (var delay in ActionReconciliationDelays)
+        {
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, reconciliationCts.Token).ConfigureAwait(false);
+            }
+
+            var pollResult = await TryGetSnapshotAsync(reconciliationCts.Token).ConfigureAwait(false);
+            var snapshot = pollResult.IsRiftRemotePlayback ? null : pollResult.Snapshot;
+            await PublishIfChangedAsync(snapshot, reconciliationCts.Token).ConfigureAwait(false);
+            logger.LogDebug(
+                "Reconciled macOS playback after action {OperationId} for {PlaybackId}; observed state {PlaybackState}.",
+                request.OperationId,
+                request.PlaybackId,
+                snapshot?.PlaybackState ?? "none");
+            if (HasActionSettled(request, previousSnapshot, snapshot))
+            {
+                return;
+            }
+        }
+    }
+
+    private static bool HasActionSettled(
+        PendingIncomingMediaPlaybackAction request,
+        MacOSNowPlayingSnapshot? previous,
+        MacOSNowPlayingSnapshot? current) => request.Action switch
+        {
+            "play" => current?.PlaybackState == "playing",
+            "pause" => current is not null && current.PlaybackState != "playing",
+            "togglePlayPause" => current is not null &&
+                (previous is null || !string.Equals(previous.PlaybackState, current.PlaybackState, StringComparison.Ordinal)),
+            "seek" => current is not null && request.PositionMs.HasValue && Math.Abs(current.PositionMs - request.PositionMs.Value) <= 1_000,
+            "next" or "previous" => current is not null &&
+                (previous is null ||
+                 !string.Equals(previous.PlaybackId, current.PlaybackId, StringComparison.Ordinal) ||
+                 !string.Equals(previous.Title, current.Title, StringComparison.Ordinal)),
+            _ => true
+        };
 
     private async Task PublishIfChangedAsync(MacOSNowPlayingSnapshot? snapshot, CancellationToken cancellationToken)
     {
@@ -330,7 +444,14 @@ internal sealed class MacOSMediaPlaybackService(
         return null;
     }
 
-    private async Task<AdapterCommandResult> RunAdapterAsync(IReadOnlyList<string> command, CancellationToken cancellationToken)
+    private Task<AdapterCommandResult> RunAdapterAsync(
+        IReadOnlyList<string> command,
+        CancellationToken cancellationToken) =>
+        _adapterRunner is null
+            ? RunAdapterProcessAsync(command, cancellationToken)
+            : _adapterRunner(command, cancellationToken);
+
+    private async Task<AdapterCommandResult> RunAdapterProcessAsync(IReadOnlyList<string> command, CancellationToken cancellationToken)
     {
         var paths = ResolveAdapterPaths();
         if (paths is null)
@@ -365,7 +486,7 @@ internal sealed class MacOSMediaPlaybackService(
         {
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             try
             {
@@ -376,6 +497,11 @@ internal sealed class MacOSMediaPlaybackService(
             }
             catch
             {
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
 
             return new AdapterCommandResult(
@@ -400,7 +526,7 @@ internal sealed class MacOSMediaPlaybackService(
         public static SnapshotPollResult RiftRemotePlayback { get; } = new(null, IsRiftRemotePlayback: true);
     }
 
-    private sealed record AdapterCommandResult(int ExitCode, string StandardOutput, string StandardError, bool MissingArtifacts)
+    internal sealed record AdapterCommandResult(int ExitCode, string StandardOutput, string StandardError, bool MissingArtifacts)
     {
         public static AdapterCommandResult MissingArtifactsResult { get; } = new(
             ExitCode: -1,
