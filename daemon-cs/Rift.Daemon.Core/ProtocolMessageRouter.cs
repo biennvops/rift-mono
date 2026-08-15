@@ -260,6 +260,7 @@ public sealed class ProtocolMessageRouter(
             EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
             await mediaPlaybackSyncService.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
             {
+                OperationId = mediaPayload.GetProperty("operationId").GetString() ?? string.Empty,
                 PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
                 SourceDeviceId = payloadSourceDeviceId,
                 RequestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
@@ -280,6 +281,7 @@ public sealed class ProtocolMessageRouter(
             EnsureEnvelopeIdentityMatches(peerDeviceId, requestingDeviceId, messageType);
             await mediaPlaybackSyncService.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
             {
+                OperationId = mediaPayload.GetProperty("operationId").GetString() ?? string.Empty,
                 PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
                 SourceDeviceId = payloadSourceDeviceId,
                 RequestingDeviceId = requestingDeviceId,

@@ -69,6 +69,9 @@ Future<void> _runCase(
     case 'notification-action-correlation':
       _runNotificationActionCorrelation(testCase);
       return;
+    case 'media-playback-action-correlation':
+      _runMediaPlaybackActionCorrelation(testCase);
+      return;
     case 'notification-sync':
       _runNotificationSync(testCase);
       return;
@@ -250,6 +253,103 @@ void _applyNotificationActionResult(
   }
   for (final field in [
     'notificationId',
+    'sourceDeviceId',
+    'requestingDeviceId',
+    'action',
+  ]) {
+    _expectEquals(result[field], request[field]);
+  }
+  states[operationId] = result['success'] == true ? 'Done' : 'Failed';
+}
+
+void _runMediaPlaybackActionCorrelation(Map<String, dynamic> testCase) {
+  final input = Map<String, dynamic>.from(testCase['input'] as Map);
+  final expected = Map<String, dynamic>.from(testCase['expected'] as Map);
+  final initialRequest = Map<String, dynamic>.from(
+    input['initialRequest'] as Map,
+  );
+  final retryRequest = Map<String, dynamic>.from(input['retryRequest'] as Map);
+  final lateResult = Map<String, dynamic>.from(input['lateResult'] as Map);
+  final retryResult = Map<String, dynamic>.from(input['retryResult'] as Map);
+
+  _validateMediaPlaybackActionPayload(initialRequest, isResult: false);
+  _validateMediaPlaybackActionPayload(retryRequest, isResult: false);
+  _validateMediaPlaybackActionPayload(lateResult, isResult: true);
+  _validateMediaPlaybackActionPayload(retryResult, isResult: true);
+  _expectEquals(lateResult['operationId'], initialRequest['operationId']);
+  _expectEquals(retryResult['operationId'], retryRequest['operationId']);
+  if (initialRequest['operationId'] == retryRequest['operationId']) {
+    throw StateError('retry must use a distinct operationId');
+  }
+
+  final pending = <String, Map<String, dynamic>>{
+    initialRequest['operationId'] as String: initialRequest,
+  };
+  final states = <String, String>{
+    initialRequest['operationId'] as String: 'Expired',
+    retryRequest['operationId'] as String: 'Dispatched',
+  };
+  pending.remove(initialRequest['operationId']);
+  pending[retryRequest['operationId'] as String] = retryRequest;
+
+  _applyMediaPlaybackActionResult(pending, states, lateResult);
+  _expectEquals(
+    states[retryRequest['operationId']],
+    expected['stateAfterLateResult'],
+  );
+
+  _applyMediaPlaybackActionResult(pending, states, retryResult);
+  _expectEquals(states[retryRequest['operationId']], expected['finalState']);
+  _expectEquals(expected['result'], 'accept');
+}
+
+void _validateMediaPlaybackActionPayload(
+  Map<String, dynamic> payload, {
+  required bool isResult,
+}) {
+  for (final field in [
+    'operationId',
+    'playbackId',
+    'sourceDeviceId',
+    'requestingDeviceId',
+    'action',
+  ]) {
+    if (payload[field] is! String || (payload[field] as String).isEmpty) {
+      throw StateError('$field is required');
+    }
+  }
+  if (!RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+  ).hasMatch(payload['operationId'] as String)) {
+    throw StateError('operationId must be a lowercase UUIDv4');
+  }
+  if (!const {
+    'play',
+    'pause',
+    'togglePlayPause',
+    'next',
+    'previous',
+    'seek',
+  }.contains(payload['action'])) {
+    throw StateError('unknown media playback action');
+  }
+  if (isResult && payload['success'] is! bool) {
+    throw StateError('success is required on action results');
+  }
+}
+
+void _applyMediaPlaybackActionResult(
+  Map<String, Map<String, dynamic>> pending,
+  Map<String, String> states,
+  Map<String, dynamic> result,
+) {
+  final operationId = result['operationId'] as String;
+  final request = pending.remove(operationId);
+  if (request == null) {
+    return;
+  }
+  for (final field in [
+    'playbackId',
     'sourceDeviceId',
     'requestingDeviceId',
     'action',

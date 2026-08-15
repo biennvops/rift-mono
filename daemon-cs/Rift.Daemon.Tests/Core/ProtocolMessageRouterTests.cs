@@ -630,6 +630,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             CreateSession(peerDeviceId, ["media.playback"]),
             CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
             {
+                operationId = Guid.NewGuid().ToString("D"),
                 playbackId = "playback-1",
                 sourceDeviceId = _identityManager.GetDeviceId(),
                 requestingDeviceId = peerDeviceId,
@@ -725,6 +726,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             CreateSession(peerDeviceId, ["media.playback"]),
             CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
             {
+                operationId = Guid.NewGuid().ToString("D"),
                 playbackId = "playback-1",
                 sourceDeviceId = _identityManager.GetDeviceId(),
                 requestingDeviceId = peerDeviceId,
@@ -748,6 +750,27 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionRequest_RequiresOperationId()
+    {
+        const string peerDeviceId = "rift-peer-media-action";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "pause"
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("MalformedMessage", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_MediaPlaybackActionRequest_RejectsSpoofedRequester()
     {
         const string peerDeviceId = "rift-peer-media-action";
@@ -756,6 +779,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             CreateSession(peerDeviceId, ["media.playback"]),
             CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
             {
+                operationId = Guid.NewGuid().ToString("D"),
                 playbackId = "playback-1",
                 sourceDeviceId = _identityManager.GetDeviceId(),
                 requestingDeviceId = "rift-spoofed-requester",
@@ -777,6 +801,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             CreateSession(peerDeviceId, ["media.playback"]),
             CreateEnvelope(peerDeviceId, "media.playbackActionResult", new
             {
+                operationId = Guid.NewGuid().ToString("D"),
                 playbackId = "playback-1",
                 sourceDeviceId = peerDeviceId,
                 requestingDeviceId = "rift-spoofed-requester",
