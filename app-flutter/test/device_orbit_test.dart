@@ -12,6 +12,55 @@ OrbitPeerPresentation _peer(String id) => OrbitPeerPresentation(
       isOnline: true,
     );
 
+void _expectSafeOrbit(Size size, int peerCount) {
+  final geometry = DeviceOrbitLayout.calculate(
+    size,
+    peerCount: peerCount,
+  );
+  final minimumCoreClearance = (geometry.localCoreSize + geometry.peerSize) / 2;
+
+  for (var step = 0; step < 32; step++) {
+    final phase = step / 32;
+    final centers = [
+      for (var index = 0; index < peerCount; index++)
+        DeviceOrbitLayout.peerCenter(
+          geometry: geometry,
+          index: index,
+          peerCount: peerCount,
+          phase: phase,
+        ),
+    ];
+
+    for (final center in centers) {
+      expect(
+        (center - geometry.center).distance,
+        greaterThanOrEqualTo(minimumCoreClearance - 0.001),
+        reason: '$peerCount peers at $size and phase $phase overlap the core',
+      );
+      expect(center.dx - geometry.peerSize / 2, greaterThanOrEqualTo(-0.001));
+      expect(center.dy - geometry.peerSize / 2, greaterThanOrEqualTo(-0.001));
+      expect(
+        center.dx + geometry.peerSize / 2,
+        lessThanOrEqualTo(size.width + 0.001),
+      );
+      expect(
+        center.dy + geometry.peerSize / 2,
+        lessThanOrEqualTo(size.height + 0.001),
+      );
+    }
+
+    for (var left = 0; left < centers.length; left++) {
+      for (var right = left + 1; right < centers.length; right++) {
+        expect(
+          (centers[left] - centers[right]).distance,
+          greaterThanOrEqualTo(geometry.peerSize - 0.001),
+          reason: '$peerCount peers at $size and phase $phase overlap',
+        );
+      }
+    }
+  }
+}
+
 void main() {
   test('orbit geometry moves coherently with phase', () {
     final geometry = DeviceOrbitLayout.calculate(const Size(900, 620));
@@ -38,6 +87,25 @@ void main() {
       ),
       phaseZero,
     );
+  });
+
+  test('orbit geometry stays clear beside a maximum desktop sidebar', () {
+    for (final peerCount in const [1, 4, 8]) {
+      _expectSafeOrbit(const Size(468, 620), peerCount);
+    }
+  });
+
+  test('orbit geometry shrinks safely in short desktop scenes', () {
+    for (final peerCount in const [1, 4, 8]) {
+      _expectSafeOrbit(const Size(700, 300), peerCount);
+    }
+
+    final geometry = DeviceOrbitLayout.calculate(
+      const Size(700, 300),
+      peerCount: 8,
+    );
+    expect(geometry.localCoreSize, lessThan(126));
+    expect(geometry.peerSize, lessThan(102));
   });
 
   test('orbit pause reasons compose', () {

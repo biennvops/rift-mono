@@ -20,19 +20,62 @@ class DeviceOrbitGeometry {
 }
 
 abstract final class DeviceOrbitLayout {
-  static DeviceOrbitGeometry calculate(Size size) {
+  static const double _horizontalMargin = 28;
+  static const double _verticalMargin = 24;
+  static const double _coreGap = 12;
+  static const double _peerGap = 10;
+
+  static DeviceOrbitGeometry calculate(
+    Size size, {
+    int peerCount = 0,
+  }) {
     final shortestSide = math.min(size.width, size.height);
-    final localCoreSize = (shortestSide * 0.24).clamp(126.0, 174.0);
-    final peerSize = (shortestSide * 0.17).clamp(102.0, 126.0);
-    final horizontalRoom = math.max(0.0, (size.width - peerSize) / 2 - 28);
-    final verticalRoom = math.max(0.0, (size.height - peerSize) / 2 - 24);
+    final nominalLocalCoreSize =
+        (shortestSide * 0.24).clamp(126.0, 174.0).toDouble();
+    final nominalPeerSize =
+        (shortestSide * 0.17).clamp(102.0, 126.0).toDouble();
+    final coreClearance =
+        (nominalLocalCoreSize + nominalPeerSize) / 2 + _coreGap;
+    final peerClearance = peerCount <= 1
+        ? 0.0
+        : (nominalPeerSize + _peerGap) / (2 * math.sin(math.pi / peerCount));
+    final requiredRadius = math.max(coreClearance, peerClearance);
+    final radiusAndPeerExtent = requiredRadius + nominalPeerSize / 2;
+    final widthScale =
+        math.max(0.0, size.width / 2 - _horizontalMargin) / radiusAndPeerExtent;
+    final heightScale =
+        math.max(0.0, size.height / 2 - _verticalMargin) / radiusAndPeerExtent;
+    final localWidthScale = math.max(0.0, size.width) / nominalLocalCoreSize;
+    final localHeightScale = math.max(0.0, size.height) / nominalLocalCoreSize;
+    final scale = peerCount <= 0
+        ? math.min(1.0, math.min(localWidthScale, localHeightScale))
+        : math.min(
+            1.0,
+            math.min(
+              math.min(widthScale, heightScale),
+              math.min(localWidthScale, localHeightScale),
+            ),
+          );
+    final localCoreSize = nominalLocalCoreSize * scale;
+    final peerSize = nominalPeerSize * scale;
+    final minimumRadius = requiredRadius * scale;
+    final horizontalRoom =
+        math.max(0.0, (size.width - peerSize) / 2 - _horizontalMargin);
+    final verticalRoom =
+        math.max(0.0, (size.height - peerSize) / 2 - _verticalMargin);
 
     return DeviceOrbitGeometry(
       center: Offset(size.width / 2, size.height / 2),
-      radiusX: math.min(size.width * 0.36, horizontalRoom),
-      radiusY: math.min(size.height * 0.33, verticalRoom),
-      localCoreSize: localCoreSize.toDouble(),
-      peerSize: peerSize.toDouble(),
+      radiusX: math.min(
+        horizontalRoom,
+        math.max(size.width * 0.36, minimumRadius),
+      ),
+      radiusY: math.min(
+        verticalRoom,
+        math.max(size.height * 0.33, minimumRadius),
+      ),
+      localCoreSize: localCoreSize,
+      peerSize: peerSize,
     );
   }
 

@@ -91,7 +91,7 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
   late final AnimationController _reflowController;
   Map<String, OrbitPeerLayoutState> _layoutStates = const {};
   Map<String, OrbitPeerPresentation> _transitionPeers = const {};
-  DeviceOrbitGeometry? _lastGeometry;
+  Size? _lastSize;
   double? _frozenPhase;
   bool _isReflowing = false;
   String? _preparedPairingHandoffDeviceId;
@@ -119,7 +119,16 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
     final pairingHandoff = widget.pairingHandoff;
     if (pairingHandoff != null &&
         _preparedPairingHandoffDeviceId != pairingHandoff.deviceId) {
-      final geometry = _lastGeometry;
+      final size = _lastSize;
+      final geometry = size == null
+          ? null
+          : DeviceOrbitLayout.calculate(
+              size,
+              peerCount: {
+                ...newIds,
+                ...pairingHandoff.previousPeers.map((peer) => peer.deviceId),
+              }.length,
+            );
       if (!widget.animatePeerChanges ||
           RiftMotion.reducedMotionOf(context) ||
           geometry == null) {
@@ -143,7 +152,13 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
       return;
     }
 
-    final geometry = _lastGeometry;
+    final size = _lastSize;
+    final geometry = size == null
+        ? null
+        : DeviceOrbitLayout.calculate(
+            size,
+            peerCount: oldIds.union(newIds).length,
+          );
     if (!widget.animatePeerChanges ||
         RiftMotion.reducedMotionOf(context) ||
         geometry == null) {
@@ -400,9 +415,18 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
-          final geometry = DeviceOrbitLayout.calculate(size);
-          _lastGeometry = geometry;
           final pairingHandoff = widget.pairingHandoff;
+          final layoutPeerIds = {
+            ...sortedPeers.map((peer) => peer.deviceId),
+            if (_isReflowing) ..._transitionPeers.keys,
+            if (pairingHandoff != null)
+              ...pairingHandoff.previousPeers.map((peer) => peer.deviceId),
+          };
+          final geometry = DeviceOrbitLayout.calculate(
+            size,
+            peerCount: layoutPeerIds.length,
+          );
+          _lastSize = size;
           if (pairingHandoff != null &&
               _preparedPairingHandoffDeviceId != pairingHandoff.deviceId &&
               widget.animatePeerChanges &&
