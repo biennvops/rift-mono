@@ -117,6 +117,9 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
     }
 
     final pairingHandoff = widget.pairingHandoff;
+    if (pairingHandoff == null) {
+      _preparedPairingHandoffDeviceId = null;
+    }
     if (pairingHandoff != null &&
         _preparedPairingHandoffDeviceId != pairingHandoff.deviceId) {
       final size = _lastSize;

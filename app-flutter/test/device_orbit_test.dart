@@ -512,6 +512,99 @@ void main() {
     );
   }
 
+  testWidgets('pairing handoff prepares again after removing the same peer',
+      (tester) async {
+    final peer = _peer('peer-repeat');
+    var peers = <OrbitPeerPresentation>[];
+    PairingOrbitHandoff? handoff;
+    late StateSetter updateScene;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: false),
+          child: StatefulBuilder(
+            builder: (context, setState) {
+              updateScene = setState;
+              return DeviceOrbitScene(
+                localDisplayName: 'Local',
+                localPlatform: 'macos',
+                peers: peers,
+                phase: const AlwaysStoppedAnimation<double>(0),
+                scanProgress: const AlwaysStoppedAnimation<double>(0),
+                peerKeyPrefix: 'repeat-handoff',
+                peerSemanticRole: 'trusted device',
+                onPeerSelected: (_) {},
+                onPeerInteractionChanged: (_, __) {},
+                onSceneFocusChanged: (_) {},
+                pairingHandoff: handoff,
+                animatePeerChanges: true,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    updateScene(() {
+      peers = [peer];
+      handoff = PairingOrbitHandoff(
+        deviceId: peer.deviceId,
+        previousPeers: const [],
+        sourceOrigin: const OrbitPeerEntryOrigin(
+          index: 0,
+          peerCount: 1,
+          phase: 0,
+        ),
+        duration: const Duration(milliseconds: 100),
+      );
+    });
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    updateScene(() => handoff = null);
+    await tester.pump();
+    updateScene(() => peers = []);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    const secondOrigin = OrbitPeerEntryOrigin(
+      index: 0,
+      peerCount: 1,
+      phase: 0.25,
+    );
+    updateScene(() {
+      peers = [peer];
+      handoff = PairingOrbitHandoff(
+        deviceId: peer.deviceId,
+        previousPeers: const [],
+        sourceOrigin: secondOrigin,
+        duration: const Duration(milliseconds: 100),
+      );
+    });
+    await tester.pump();
+
+    final sceneFinder = find.byType(DeviceOrbitScene);
+    final geometry = DeviceOrbitLayout.calculate(
+      tester.getSize(sceneFinder),
+      peerCount: 1,
+    );
+    final expectedCenter = tester.getTopLeft(sceneFinder) +
+        DeviceOrbitLayout.peerCenter(
+          geometry: geometry,
+          index: secondOrigin.index,
+          peerCount: secondOrigin.peerCount,
+          phase: secondOrigin.phase,
+        );
+    final actualCenter = tester.getCenter(
+      find.byKey(const ValueKey('repeat-handoff-peer-repeat')),
+    );
+    expect(actualCenter.dx, closeTo(expectedCenter.dx, 0.01));
+    expect(actualCenter.dy, closeTo(expectedCenter.dy, 0.01));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('reduced motion changes membership without peer travel',
       (tester) async {
     final peerA = _peer('peer-a');
