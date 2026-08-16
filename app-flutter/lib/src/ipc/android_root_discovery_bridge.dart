@@ -83,7 +83,21 @@ class AndroidDiscoverySnapshotDelta {
   });
 }
 
-class AndroidRootDiscoveryBridge {
+abstract interface class AndroidDiscoveryBridge {
+  Stream<AndroidDiscoveredPeer> get onPeerDiscovered;
+  Stream<AndroidDiscoveredPeer> get onPeerLost;
+  Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested;
+  bool get isDiscovering;
+
+  List<Map<String, dynamic>> listPeersForIpc();
+  List<Map<String, dynamic>> listPeersForDaemonControl();
+  Future<void> ensureAdvertising();
+  Future<void> startDiscovery();
+  Future<void> stopDiscovery();
+  Future<void> dispose();
+}
+
+class AndroidRootDiscoveryBridge implements AndroidDiscoveryBridge {
   static const int _fallbackDiscoveryPort = 9141;
   static const Duration _fallbackBeaconInterval = Duration(seconds: 2);
   static const Duration _fallbackPeerTtl = Duration(seconds: 6);
@@ -123,26 +137,33 @@ class AndroidRootDiscoveryBridge {
     this.maxVersion = '0.1-draft',
   }) : _instanceId = 'rift-peer-${DateTime.now().millisecondsSinceEpoch}';
 
+  @override
   Stream<AndroidDiscoveredPeer> get onPeerDiscovered =>
       _peerDiscoveredController.stream;
+  @override
   Stream<AndroidDiscoveredPeer> get onPeerLost => _peerLostController.stream;
+  @override
   Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested =>
       _reverseTcpPingController.stream;
 
+  @override
   bool get isDiscovering => _discovery != null;
 
+  @override
   List<Map<String, dynamic>> listPeersForIpc() {
     return tracker.currentPeers
         .map((peer) => peer.toIpcMap())
         .toList(growable: false);
   }
 
+  @override
   List<Map<String, dynamic>> listPeersForDaemonControl() {
     return tracker.currentPeers
         .map((peer) => peer.toDaemonControlMap())
         .toList(growable: false);
   }
 
+  @override
   Future<void> ensureAdvertising() async {
     if (_registration != null) {
       await _ensureFallbackAdvertising();
@@ -172,6 +193,7 @@ class AndroidRootDiscoveryBridge {
     await _ensureFallbackAdvertising();
   }
 
+  @override
   Future<void> startDiscovery() async {
     if (_discovery != null) return;
 
@@ -181,6 +203,7 @@ class AndroidRootDiscoveryBridge {
     await _ensureFallbackDiscovery();
   }
 
+  @override
   Future<void> stopDiscovery() async {
     if (_discovery == null) return;
 
@@ -207,6 +230,7 @@ class AndroidRootDiscoveryBridge {
     }
   }
 
+  @override
   Future<void> dispose() async {
     await stopDiscovery();
     _fallbackAdvertiserTimer?.cancel();
@@ -219,6 +243,7 @@ class AndroidRootDiscoveryBridge {
     }
     await _peerDiscoveredController.close();
     await _peerLostController.close();
+    await _reverseTcpPingController.close();
   }
 
   void _onDiscoveryChanged() {
