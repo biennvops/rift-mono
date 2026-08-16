@@ -11,6 +11,7 @@ void main() {
     var remoteMediaDisposeCalls = 0;
     var deviceStatusDisposeCalls = 0;
     var clientDisposeCalls = 0;
+    var drainCalls = 0;
     final shutdown = AndroidBackgroundRuntimeShutdown(
       stopEventProducers: () async {
         stopCalls += 1;
@@ -29,6 +30,10 @@ void main() {
         clientDisposeCalls += 1;
         order.add('client');
       },
+      drainOwnedWork: () {
+        drainCalls += 1;
+        order.add('drain');
+      },
     );
 
     final first = shutdown.shutdown();
@@ -45,10 +50,42 @@ void main() {
     expect(remoteMediaDisposeCalls, 1);
     expect(deviceStatusDisposeCalls, 1);
     expect(clientDisposeCalls, 1);
+    expect(drainCalls, 1);
     expect(
       order,
-      <String>['stop-events', 'remote-media', 'device-status', 'client'],
+      <String>[
+        'stop-events',
+        'remote-media',
+        'device-status',
+        'client',
+        'drain',
+      ],
     );
+  });
+
+  test('client disposal precedes draining residual owned work', () async {
+    final drainStarted = Completer<void>();
+    final drainGate = Completer<void>();
+    var clientDisposeCalls = 0;
+    final shutdown = AndroidBackgroundRuntimeShutdown(
+      stopEventProducers: () {},
+      disposeRemoteMedia: () {},
+      disposeDeviceStatusPublisher: () {},
+      disposeClient: () {
+        clientDisposeCalls += 1;
+      },
+      drainOwnedWork: () async {
+        drainStarted.complete();
+        await drainGate.future;
+      },
+    );
+
+    final pending = shutdown.shutdown();
+    await drainStarted.future;
+
+    expect(clientDisposeCalls, 1);
+    drainGate.complete();
+    await pending;
   });
 
   test('a failed ancillary disposer does not skip client disposal', () async {
@@ -61,6 +98,7 @@ void main() {
       disposeClient: () {
         clientDisposeCalls += 1;
       },
+      drainOwnedWork: () {},
       logger: logs.add,
     );
 

@@ -39,17 +39,20 @@ class AndroidBackgroundRuntimeShutdown {
     required FutureOr<void> Function() disposeRemoteMedia,
     required FutureOr<void> Function() disposeDeviceStatusPublisher,
     required FutureOr<void> Function() disposeClient,
+    required FutureOr<void> Function() drainOwnedWork,
     void Function(String message)? logger,
   })  : _stopEventProducers = stopEventProducers,
         _disposeRemoteMedia = disposeRemoteMedia,
         _disposeDeviceStatusPublisher = disposeDeviceStatusPublisher,
         _disposeClient = disposeClient,
+        _drainOwnedWork = drainOwnedWork,
         _logger = logger;
 
   final FutureOr<void> Function() _stopEventProducers;
   final FutureOr<void> Function() _disposeRemoteMedia;
   final FutureOr<void> Function() _disposeDeviceStatusPublisher;
   final FutureOr<void> Function() _disposeClient;
+  final FutureOr<void> Function() _drainOwnedWork;
   final void Function(String message)? _logger;
   Future<void>? _shutdownFuture;
   bool _isShuttingDown = false;
@@ -67,6 +70,7 @@ class AndroidBackgroundRuntimeShutdown {
     await _runStep('remote media', _disposeRemoteMedia);
     await _runStep('device status', _disposeDeviceStatusPublisher);
     await _runStep('JSON-RPC client', _disposeClient);
+    await _runStep('owned async work', _drainOwnedWork);
     _logger?.call('Dart runtime shutdown complete');
   }
 
@@ -219,31 +223,33 @@ Future<void> runAndroidBackgroundMain() async {
           );
         }
       }
+    },
+    disposeRemoteMedia: () async {
+      final owner = remoteMedia;
+      remoteMedia = null;
+      await owner?.dispose();
+    },
+    disposeDeviceStatusPublisher: () async {
+      final owner = deviceStatusPublisher;
+      deviceStatusPublisher = null;
+      await owner?.dispose();
+    },
+    disposeClient: client.dispose,
+    drainOwnedWork: () async {
+      final remoteStart = remoteMediaStart;
+      final deviceStatusStart = deviceStatusPublisherStart;
+      remoteMediaStart = null;
+      deviceStatusPublisherStart = null;
+      try {
+        await remoteStart;
+      } catch (_) {}
+      try {
+        await deviceStatusStart;
+      } catch (_) {}
       try {
         await mirroredNotificationLifecycleQueue;
       } catch (_) {}
     },
-    disposeRemoteMedia: () async {
-      final owner = remoteMedia;
-      final start = remoteMediaStart;
-      remoteMedia = null;
-      remoteMediaStart = null;
-      await owner?.dispose();
-      try {
-        await start;
-      } catch (_) {}
-    },
-    disposeDeviceStatusPublisher: () async {
-      final owner = deviceStatusPublisher;
-      final start = deviceStatusPublisherStart;
-      deviceStatusPublisher = null;
-      deviceStatusPublisherStart = null;
-      await owner?.dispose();
-      try {
-        await start;
-      } catch (_) {}
-    },
-    disposeClient: client.dispose,
     logger: (message) => debugPrint('[Android Background] $message'),
   );
 
