@@ -42,7 +42,7 @@ jobs:
         run: dart analyze
         working-directory: daemon-dart
       - name: Run tests
-        run: dart test -x network
+        run: flutter test --exclude-tags network
         working-directory: daemon-dart
 
   tests-interop:
