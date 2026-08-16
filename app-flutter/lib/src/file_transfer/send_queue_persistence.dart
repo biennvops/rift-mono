@@ -87,9 +87,8 @@ class PersistedSendQueueEntry {
       );
     }
 
-    final shouldWaitForReconnect =
-        originalStatus == SendQueueStatus.sending ||
-            map['autoRetryWhenPeerAvailable'] == true;
+    final shouldWaitForReconnect = originalStatus == SendQueueStatus.sending ||
+        map['autoRetryWhenPeerAvailable'] == true;
 
     return PersistedSendQueueEntry(
       localPath: localPath,
@@ -108,9 +107,7 @@ class PersistedSendQueueEntry {
           ? _waitingMessage(map['targetDeviceId']?.toString())
           : map['errorMessage']?.toString(),
       autoRetryWhenPeerAvailable: shouldWaitForReconnect,
-      status: shouldWaitForReconnect
-          ? SendQueueStatus.queued
-          : originalStatus,
+      status: shouldWaitForReconnect ? SendQueueStatus.queued : originalStatus,
     );
   }
 

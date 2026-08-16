@@ -43,7 +43,8 @@ class MacOSMediaPlaybackBridge {
     required Map<String, Object?> playback,
   }) async {
     if (!isSupported) return false;
-    final shown = await _methodChannel.invokeMethod<bool>('showRemotePlayback', {
+    final shown =
+        await _methodChannel.invokeMethod<bool>('showRemotePlayback', {
       'playback': playback,
     });
     return shown ?? false;

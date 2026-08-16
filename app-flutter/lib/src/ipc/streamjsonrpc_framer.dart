@@ -45,7 +45,8 @@ StreamChannel<String> streamJsonRpcFramer(
         final len = _parseContentLength(headerText);
         if (len == null) {
           incomingController.addError(
-            FormatException('Missing/invalid Content-Length header: "$headerText"'),
+            FormatException(
+                'Missing/invalid Content-Length header: "$headerText"'),
           );
           buffer.clear();
           return;
@@ -78,12 +79,16 @@ StreamChannel<String> streamJsonRpcFramer(
     incomingController.addError(e, st);
   });
 
-  return StreamChannel<String>(incomingController.stream, outgoingController.sink);
+  return StreamChannel<String>(
+      incomingController.stream, outgoingController.sink);
 }
 
 int _indexOfDoubleCrlf(List<int> data) {
   for (var i = 0; i + 3 < data.length; i++) {
-    if (data[i] == 13 && data[i + 1] == 10 && data[i + 2] == 13 && data[i + 3] == 10) {
+    if (data[i] == 13 &&
+        data[i + 1] == 10 &&
+        data[i + 2] == 13 &&
+        data[i + 3] == 10) {
       return i;
     }
   }

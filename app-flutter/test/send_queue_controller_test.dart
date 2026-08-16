@@ -461,7 +461,8 @@ void main() {
     expect(controller.items.single.status, SendQueueStatus.queued);
   });
 
-  test('controller dispatchToPeer keeps provisional daemon item when list is stale',
+  test(
+      'controller dispatchToPeer keeps provisional daemon item when list is stale',
       () async {
     final tempDir =
         await Directory.systemTemp.createTemp('rift-queue-dispatch-stale');

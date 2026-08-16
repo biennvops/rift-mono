@@ -11,4 +11,3 @@ class FakeTransport implements IpcTransport {
   @override
   Future<void> disconnect() async {}
 }
-

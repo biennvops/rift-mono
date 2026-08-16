@@ -98,7 +98,8 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to unblock: ${JsonRpcRiftClient.formatDisplayError(e)}'),
+            content: Text(
+                'Failed to unblock: ${JsonRpcRiftClient.formatDisplayError(e)}'),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -145,7 +146,8 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                       width: 48,
                       height: 48,
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.1),
+                        color: theme.colorScheme.primaryContainer
+                            .withValues(alpha: 0.1),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -183,8 +185,11 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                   padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.surface,
-                    border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
-                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+                    border: Border(
+                        top: BorderSide(
+                            color: theme.colorScheme.outlineVariant)),
+                    borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(12)),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -194,10 +199,14 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: theme.colorScheme.primary,
                           side: BorderSide(color: theme.colorScheme.primary),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 12),
                         ),
-                        child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                        child: const Text('Cancel',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 14)),
                       ),
                       const SizedBox(width: 16),
                       FilledButton(
@@ -205,10 +214,14 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                         style: FilledButton.styleFrom(
                           backgroundColor: theme.colorScheme.primary,
                           foregroundColor: theme.colorScheme.onPrimary,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 12),
                         ),
-                        child: const Text('Unblock', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                        child: const Text('Unblock',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 14)),
                       ),
                     ],
                   ),
@@ -227,7 +240,9 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
     final p = platform.toLowerCase();
     if (p.contains('android')) return Icons.smartphone;
     if (p.contains('windows')) return Icons.desktop_windows;
-    if (p.contains('mac') || p.contains('ios')) return Icons.laptop_mac; // approximate for iOS/Mac
+    if (p.contains('mac') || p.contains('ios')) {
+      return Icons.laptop_mac; // approximate for iOS/Mac
+    }
     if (p.contains('linux')) return Icons.computer;
     return Icons.devices;
   }
@@ -236,7 +251,20 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
     if (timestamp == null || timestamp.isEmpty) return 'Unknown Date';
     try {
       final dt = DateTime.parse(timestamp).toLocal();
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const months = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec'
+      ];
       return '${months[dt.month - 1]} ${dt.day.toString().padLeft(2, '0')}, ${dt.year}';
     } catch (_) {
       return timestamp;
@@ -270,13 +298,16 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(
-                  child: Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+                  child: Text(_error!,
+                      style: TextStyle(color: theme.colorScheme.error)),
                 )
               : SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
                   child: Center(
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1024), // max-w-5xl
+                      constraints:
+                          const BoxConstraints(maxWidth: 1024), // max-w-5xl
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -284,14 +315,15 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                             padding: const EdgeInsets.only(bottom: 24),
                             child: Text(
                               'Manage devices that have been restricted from connecting to your secure sync network. Unblocking a device will restore its ability to request connection.',
-                              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary),
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.secondary),
                             ),
                           ),
-
                           if (_blockedPeers.isEmpty)
                             Center(
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 48),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 48),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -299,15 +331,27 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                                       width: 64,
                                       height: 64,
                                       decoration: BoxDecoration(
-                                        color: theme.colorScheme.surfaceContainer,
+                                        color:
+                                            theme.colorScheme.surfaceContainer,
                                         shape: BoxShape.circle,
                                       ),
-                                      child: Icon(Icons.verified_user, size: 32, color: theme.colorScheme.secondary),
+                                      child: Icon(Icons.verified_user,
+                                          size: 32,
+                                          color: theme.colorScheme.secondary),
                                     ),
                                     const SizedBox(height: 16),
-                                    Text('No Blocked Peers', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
+                                    Text('No Blocked Peers',
+                                        style: theme.textTheme.headlineSmall
+                                            ?.copyWith(
+                                                color:
+                                                    theme.colorScheme.onSurface,
+                                                fontWeight: FontWeight.bold)),
                                     const SizedBox(height: 8),
-                                    Text('You haven\'t blocked any devices.', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary)),
+                                    Text('You haven\'t blocked any devices.',
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                                color: theme
+                                                    .colorScheme.secondary)),
                                   ],
                                 ),
                               ),
@@ -316,49 +360,87 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                             Container(
                               decoration: BoxDecoration(
                                 color: theme.colorScheme.surfaceContainerLowest,
-                                border: Border.all(color: theme.colorScheme.outlineVariant),
+                                border: Border.all(
+                                    color: theme.colorScheme.outlineVariant),
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Column(
                                 children: [
                                   // List Header
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 8),
                                     decoration: BoxDecoration(
                                       color: theme.colorScheme.surfaceContainer,
-                                      border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                                      border: Border(
+                                          bottom: BorderSide(
+                                              color: theme
+                                                  .colorScheme.outlineVariant)),
+                                      borderRadius: const BorderRadius.vertical(
+                                          top: Radius.circular(12)),
                                     ),
                                     child: Row(
                                       children: [
                                         Expanded(
                                           flex: 2,
-                                          child: Text('DEVICE & PLATFORM', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.secondary, letterSpacing: 1.0)),
+                                          child: Text('DEVICE & PLATFORM',
+                                              style: theme.textTheme.labelSmall
+                                                  ?.copyWith(
+                                                      color: theme.colorScheme
+                                                          .secondary,
+                                                      letterSpacing: 1.0)),
                                         ),
                                         if (!isMobile)
                                           Expanded(
                                             flex: 1,
-                                            child: Text('DATE BLOCKED', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.secondary, letterSpacing: 1.0)),
+                                            child: Text('DATE BLOCKED',
+                                                style: theme
+                                                    .textTheme.labelSmall
+                                                    ?.copyWith(
+                                                        color: theme.colorScheme
+                                                            .secondary,
+                                                        letterSpacing: 1.0)),
                                           ),
-                                        Text('ACTION', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.secondary, letterSpacing: 1.0)),
+                                        Text('ACTION',
+                                            style: theme.textTheme.labelSmall
+                                                ?.copyWith(
+                                                    color: theme
+                                                        .colorScheme.secondary,
+                                                    letterSpacing: 1.0)),
                                       ],
                                     ),
                                   ),
                                   ..._blockedPeers.asMap().entries.map((entry) {
                                     final index = entry.key;
                                     final peer = entry.value;
-                                    final isLast = index == _blockedPeers.length - 1;
-                                    final deviceId = peer['deviceId']?.toString() ?? 'unknown';
-                                    final displayName = peer['displayName']?.toString() ?? 'Unknown Device';
-                                    final platform = peer['platform']?.toString();
-                                    final osVersion = peer['osVersion']?.toString() ?? 'Unknown OS';
-                                    final blockedAt = _formatDate(peer['blockedAt']?.toString() ?? peer['lastSeenAt']?.toString());
-                                    final isUnblocking = _unblockingPeers.contains(deviceId);
+                                    final isLast =
+                                        index == _blockedPeers.length - 1;
+                                    final deviceId =
+                                        peer['deviceId']?.toString() ??
+                                            'unknown';
+                                    final displayName =
+                                        peer['displayName']?.toString() ??
+                                            'Unknown Device';
+                                    final platform =
+                                        peer['platform']?.toString();
+                                    final osVersion =
+                                        peer['osVersion']?.toString() ??
+                                            'Unknown OS';
+                                    final blockedAt = _formatDate(
+                                        peer['blockedAt']?.toString() ??
+                                            peer['lastSeenAt']?.toString());
+                                    final isUnblocking =
+                                        _unblockingPeers.contains(deviceId);
 
                                     return Container(
                                       padding: const EdgeInsets.all(16),
                                       decoration: BoxDecoration(
-                                        border: isLast ? null : Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+                                        border: isLast
+                                            ? null
+                                            : Border(
+                                                bottom: BorderSide(
+                                                    color: theme.colorScheme
+                                                        .outlineVariant)),
                                       ),
                                       child: Row(
                                         children: [
@@ -370,38 +452,68 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                                                   width: 40,
                                                   height: 40,
                                                   decoration: BoxDecoration(
-                                                    color: theme.colorScheme.errorContainer,
+                                                    color: theme.colorScheme
+                                                        .errorContainer,
                                                     shape: BoxShape.circle,
                                                   ),
-                                                  child: Icon(_platformIcon(platform), color: theme.colorScheme.error, size: 20),
+                                                  child: Icon(
+                                                      _platformIcon(platform),
+                                                      color: theme
+                                                          .colorScheme.error,
+                                                      size: 20),
                                                 ),
                                                 const SizedBox(width: 16),
                                                 Expanded(
                                                   child: Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
                                                     children: [
                                                       Text(
                                                         displayName,
-                                                        style: theme.textTheme.labelMedium?.copyWith(
-                                                          color: theme.colorScheme.onSurface,
+                                                        style: theme.textTheme
+                                                            .labelMedium
+                                                            ?.copyWith(
+                                                          color: theme
+                                                              .colorScheme
+                                                              .onSurface,
                                                         ),
                                                         maxLines: 1,
-                                                        overflow: TextOverflow.ellipsis,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
                                                       ),
                                                       const SizedBox(height: 4),
                                                       if (isMobile) ...[
                                                         Text(
                                                           'Blocked: $blockedAt',
-                                                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary),
+                                                          style: theme.textTheme
+                                                              .bodySmall
+                                                              ?.copyWith(
+                                                                  color: theme
+                                                                      .colorScheme
+                                                                      .secondary),
                                                         ),
                                                       ] else ...[
                                                         Row(
                                                           children: [
-                                                            Icon(_platformIcon(platform), size: 14, color: theme.colorScheme.secondary),
-                                                            const SizedBox(width: 4),
+                                                            Icon(
+                                                                _platformIcon(
+                                                                    platform),
+                                                                size: 14,
+                                                                color: theme
+                                                                    .colorScheme
+                                                                    .secondary),
+                                                            const SizedBox(
+                                                                width: 4),
                                                             Text(
                                                               '${platform != null ? platform.toUpperCase() : "UNKNOWN"} $osVersion',
-                                                              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary),
+                                                              style: theme
+                                                                  .textTheme
+                                                                  .bodySmall
+                                                                  ?.copyWith(
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .secondary),
                                                             ),
                                                           ],
                                                         ),
@@ -417,25 +529,49 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                                               flex: 1,
                                               child: Text(
                                                 blockedAt,
-                                                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary),
+                                                style: theme.textTheme.bodySmall
+                                                    ?.copyWith(
+                                                        color: theme.colorScheme
+                                                            .secondary),
                                               ),
                                             ),
                                           OutlinedButton(
-                                            onPressed: isUnblocking ? null : () async {
-                                              final confirmed = await _showUnblockConfirmation(displayName);
-                                              if (confirmed) {
-                                                _unblockPeer(deviceId);
-                                              }
-                                            },
+                                            onPressed: isUnblocking
+                                                ? null
+                                                : () async {
+                                                    final confirmed =
+                                                        await _showUnblockConfirmation(
+                                                            displayName);
+                                                    if (confirmed) {
+                                                      _unblockPeer(deviceId);
+                                                    }
+                                                  },
                                             style: OutlinedButton.styleFrom(
-                                              foregroundColor: theme.colorScheme.primary,
-                                              side: BorderSide(color: theme.colorScheme.primary),
-                                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                              foregroundColor:
+                                                  theme.colorScheme.primary,
+                                              side: BorderSide(
+                                                  color: theme
+                                                      .colorScheme.primary),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 8),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(4)),
                                             ),
                                             child: isUnblocking
-                                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                                              : const Text('Unblock', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                                ? const SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                            strokeWidth: 2))
+                                                : const Text('Unblock',
+                                                    style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 14)),
                                           ),
                                         ],
                                       ),

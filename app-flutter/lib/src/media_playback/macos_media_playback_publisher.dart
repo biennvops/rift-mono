@@ -60,8 +60,10 @@ class MacOSMediaPlaybackPublisher {
       'canSkipNext': event['canSkipNext'] == true,
       'canSkipPrevious': event['canSkipPrevious'] == true,
       'canSeek': event['canSeek'] == true,
-      if (event['updatedAt'] != null) 'updatedAt': event['updatedAt']?.toString(),
-      if (event['removedAt'] != null) 'removedAt': event['removedAt']?.toString(),
+      if (event['updatedAt'] != null)
+        'updatedAt': event['updatedAt']?.toString(),
+      if (event['removedAt'] != null)
+        'removedAt': event['removedAt']?.toString(),
     };
 
     try {
@@ -70,14 +72,18 @@ class MacOSMediaPlaybackPublisher {
         payload: payload,
       );
     } catch (error) {
-      debugPrint('[Media Playback] Failed to publish macOS playback event: $error');
+      debugPrint(
+          '[Media Playback] Failed to publish macOS playback event: $error');
     }
   }
 
   Future<void> _handleActionRequest(Map<String, dynamic> request) async {
     final requestId = request['requestId']?.toString();
     final action = request['action']?.toString();
-    if (requestId == null || requestId.isEmpty || action == null || action.isEmpty) {
+    if (requestId == null ||
+        requestId.isEmpty ||
+        action == null ||
+        action.isEmpty) {
       return;
     }
 
