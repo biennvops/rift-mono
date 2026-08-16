@@ -194,6 +194,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
     if (_advertising) {
       return _advertisingStartFuture ?? Future<void>.value();
     }
+    if (_registration != null && _advertisingStopFuture == null) {
+      throw StateError('Advertising teardown must complete before restarting.');
+    }
 
     _advertising = true;
     final generation = ++_advertisingGeneration;
@@ -214,12 +217,12 @@ class DiscoveryServiceImpl implements DiscoveryService {
     Future<void>? stopping,
     int generation,
   ) async {
-    if (stopping != null) {
-      await stopping;
-    }
-    if (!_isAdvertisingGeneration(generation)) return;
-
     try {
+      if (stopping != null) {
+        await stopping;
+      }
+      if (!_isAdvertisingGeneration(generation)) return;
+
       await _startAdvertisingLifecycle(generation);
     } catch (_) {
       if (_isAdvertisingGeneration(generation)) {
@@ -247,7 +250,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
       ),
     );
     if (!_isAdvertisingGeneration(generation)) {
-      await _safeUnregister(registration);
+      await _discardStaleRegistration(registration);
       return;
     }
     _registration = registration;
@@ -365,8 +368,6 @@ class DiscoveryServiceImpl implements DiscoveryService {
     final existingStop = _advertisingStopFuture;
     if (existingStop != null) return existingStop;
 
-    final registration = _registration;
-    _registration = null;
     final sockets = _fallbackAdvertiserSockets;
     _fallbackAdvertiserSockets = [];
     final ownedWork = <Future<void>?>[
@@ -376,18 +377,16 @@ class DiscoveryServiceImpl implements DiscoveryService {
     ];
 
     late final Future<void> stopFuture;
-    stopFuture = _finishStopAdvertising(registration, sockets, ownedWork)
-        .whenComplete(() {
-          if (identical(_advertisingStopFuture, stopFuture)) {
-            _advertisingStopFuture = null;
-          }
-        });
+    stopFuture = _finishStopAdvertising(sockets, ownedWork).whenComplete(() {
+      if (identical(_advertisingStopFuture, stopFuture)) {
+        _advertisingStopFuture = null;
+      }
+    });
     _advertisingStopFuture = stopFuture;
     return stopFuture;
   }
 
   Future<void> _finishStopAdvertising(
-    nsd.Registration? registration,
     List<DiscoveryAdvertiserSocket> sockets,
     List<Future<void>?> ownedWork,
   ) async {
@@ -395,10 +394,14 @@ class DiscoveryServiceImpl implements DiscoveryService {
       socket.close();
     }
     await Future.wait([
-      if (registration != null) _safeUnregister(registration),
       for (final work in ownedWork)
         if (work != null) _ignoreErrors(work),
     ]);
+
+    final registration = _registration;
+    if (registration != null) {
+      await _unregisterCurrentRegistration(registration);
+    }
   }
 
   @override
@@ -412,6 +415,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
     _throwIfDisposed();
     if (_discovering) {
       return _discoveryStartFuture ?? Future<void>.value();
+    }
+    if (_discovery != null && _discoveryStopFuture == null) {
+      throw StateError('Discovery teardown must complete before restarting.');
     }
 
     _discovering = true;
@@ -433,12 +439,12 @@ class DiscoveryServiceImpl implements DiscoveryService {
     Future<void>? stopping,
     int generation,
   ) async {
-    if (stopping != null) {
-      await stopping;
-    }
-    if (!_isDiscoveryGeneration(generation)) return;
-
     try {
+      if (stopping != null) {
+        await stopping;
+      }
+      if (!_isDiscoveryGeneration(generation)) return;
+
       await _startDiscoveryLifecycle(generation);
     } catch (_) {
       if (_isDiscoveryGeneration(generation)) {
@@ -500,8 +506,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
       final discovery = _discovery;
       if (discovery != null) {
-        _discovery = null;
-        await _safeStopDiscovery(discovery);
+        await _stopCurrentDiscovery(discovery);
       }
       if (!_isDiscoveryGeneration(generation)) return;
 
@@ -523,7 +528,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     }
 
     if (!_isDiscoveryGeneration(generation)) {
-      await _safeStopDiscovery(discovery);
+      await _discardStaleDiscovery(discovery);
       return;
     }
 
@@ -721,8 +726,6 @@ class DiscoveryServiceImpl implements DiscoveryService {
     final existingStop = _discoveryStopFuture;
     if (existingStop != null) return existingStop;
 
-    final discovery = _discovery;
-    _discovery = null;
     final fallbackListener = _fallbackListener;
     _fallbackListener = null;
     final fallbackListenerSub = _fallbackListenerSub;
@@ -738,7 +741,6 @@ class DiscoveryServiceImpl implements DiscoveryService {
     late final Future<void> stopFuture;
     stopFuture =
         _finishStopDiscovery(
-          discovery,
           fallbackListener,
           fallbackListenerSub,
           ownedWork,
@@ -752,7 +754,6 @@ class DiscoveryServiceImpl implements DiscoveryService {
   }
 
   Future<void> _finishStopDiscovery(
-    nsd.Discovery? discovery,
     DiscoveryFallbackListener? fallbackListener,
     StreamSubscription<Datagram>? fallbackListenerSub,
     List<Future<void>?> ownedWork,
@@ -760,10 +761,14 @@ class DiscoveryServiceImpl implements DiscoveryService {
     fallbackListener?.close();
     await Future.wait([
       if (fallbackListenerSub != null) fallbackListenerSub.cancel(),
-      if (discovery != null) _safeStopDiscovery(discovery),
       for (final work in ownedWork)
         if (work != null) _ignoreErrors(work),
     ]);
+
+    final discovery = _discovery;
+    if (discovery != null) {
+      await _stopCurrentDiscovery(discovery);
+    }
   }
 
   @override
@@ -923,19 +928,37 @@ class DiscoveryServiceImpl implements DiscoveryService {
     }
   }
 
-  Future<void> _safeUnregister(nsd.Registration registration) async {
-    try {
-      await _unregisterNsd(registration);
-    } catch (error) {
-      RiftLog.warn('[Discovery] Failed to unregister NSD service: $error');
+  Future<void> _unregisterCurrentRegistration(
+    nsd.Registration registration,
+  ) async {
+    await _unregisterNsd(registration);
+    if (identical(_registration, registration)) {
+      _registration = null;
     }
   }
 
-  Future<void> _safeStopDiscovery(nsd.Discovery discovery) async {
+  Future<void> _discardStaleRegistration(nsd.Registration registration) async {
+    try {
+      await _unregisterNsd(registration);
+    } catch (error) {
+      RiftLog.warn(
+        '[Discovery] Failed to unregister stale NSD service: $error',
+      );
+    }
+  }
+
+  Future<void> _stopCurrentDiscovery(nsd.Discovery discovery) async {
+    await _stopNsd(discovery);
+    if (identical(_discovery, discovery)) {
+      _discovery = null;
+    }
+  }
+
+  Future<void> _discardStaleDiscovery(nsd.Discovery discovery) async {
     try {
       await _stopNsd(discovery);
     } catch (error) {
-      RiftLog.warn('[Discovery] Failed to stop NSD discovery: $error');
+      RiftLog.warn('[Discovery] Failed to stop stale NSD discovery: $error');
     }
   }
 

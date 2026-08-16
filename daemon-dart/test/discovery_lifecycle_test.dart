@@ -87,6 +87,8 @@ class _FakeFallbackListener implements DiscoveryFallbackListener {
 typedef _InterfaceStep = Future<List<FallbackInterfaceSnapshot>> Function();
 typedef _RegistrationStep =
     Future<nsd.Registration> Function(nsd.Service service);
+typedef _RegistrationStopStep =
+    Future<void> Function(nsd.Registration registration);
 typedef _DiscoveryStartStep = Future<nsd.Discovery> Function(String type);
 typedef _DiscoveryStopStep = Future<void> Function(nsd.Discovery discovery);
 typedef _SocketBindStep =
@@ -96,6 +98,7 @@ class _FakeDiscoveryDependencies {
   final scheduler = _ManualPeriodicScheduler();
   final interfaceSteps = <_InterfaceStep>[];
   final registrationSteps = <_RegistrationStep>[];
+  final unregisterSteps = <_RegistrationStopStep>[];
   final discoveryStartSteps = <_DiscoveryStartStep>[];
   final discoveryStopSteps = <_DiscoveryStopStep>[];
   final socketBindSteps = <_SocketBindStep>[];
@@ -148,6 +151,9 @@ class _FakeDiscoveryDependencies {
 
   Future<void> unregister(nsd.Registration registration) async {
     unregisterCalls++;
+    if (unregisterSteps.isNotEmpty) {
+      await unregisterSteps.removeAt(0)(registration);
+    }
     unregistered.add(registration);
   }
 
@@ -342,6 +348,39 @@ void main() {
       expect(dependencies.unregisterCalls, 1);
     });
 
+    test(
+      'stopAdvertising propagates unregister failure and permits retry',
+      () async {
+        final dependencies = _FakeDiscoveryDependencies();
+        final service = dependencies.createService();
+        addTearDown(service.dispose);
+        await service.startAdvertising();
+        final registration = dependencies.registrations.single;
+        final failure = StateError('simulated unregister failure');
+        dependencies.unregisterSteps.add((_) => Future<void>.error(failure));
+
+        final stopping = service.stopAdvertising();
+        final restarting = service.startAdvertising();
+        await Future.wait([
+          expectLater(stopping, throwsA(same(failure))),
+          expectLater(restarting, throwsA(same(failure))),
+        ]);
+
+        expect(dependencies.unregisterCalls, 1);
+        expect(dependencies.unregistered, isEmpty);
+        expect(service.startAdvertising, throwsStateError);
+        expect(dependencies.registrationCalls, 1);
+
+        await service.stopAdvertising();
+
+        expect(dependencies.unregisterCalls, 2);
+        expect(dependencies.unregistered, [registration]);
+
+        await service.startAdvertising();
+        expect(dependencies.registrationCalls, 2);
+      },
+    );
+
     test('stopAdvertising closes a socket from a stale bind', () async {
       final dependencies = _FakeDiscoveryDependencies();
       final service = dependencies.createService();
@@ -422,6 +461,32 @@ void main() {
       expect(dependencies.maxActiveDiscoveryStartCalls, 1);
     });
 
+    test('failed discovery refresh stop does not start a duplicate', () async {
+      final dependencies = _FakeDiscoveryDependencies();
+      final service = dependencies.createService();
+      addTearDown(service.dispose);
+      await service.startDiscovery();
+      final originalDiscovery = dependencies.discoveries.single;
+      dependencies.interfaceSteps.add(() async => _wifi);
+      dependencies.discoveryStopSteps.add(
+        (_) => Future<void>.error(StateError('simulated refresh stop failure')),
+      );
+      final timer = dependencies.scheduler.latest(const Duration(seconds: 30));
+
+      await timer.fire();
+
+      expect(dependencies.discoveryStopCalls, 1);
+      expect(dependencies.discoveryStartCalls, 1);
+      expect(dependencies.stoppedDiscoveries, isEmpty);
+
+      dependencies.interfaceSteps.add(() async => _hotspot);
+      await timer.fire();
+
+      expect(dependencies.discoveryStopCalls, 2);
+      expect(dependencies.discoveryStartCalls, 2);
+      expect(dependencies.stoppedDiscoveries, [originalDiscovery]);
+    });
+
     test('stopDiscovery disposes a stale NSD start', () async {
       final dependencies = _FakeDiscoveryDependencies();
       final service = dependencies.createService();
@@ -449,6 +514,36 @@ void main() {
         dependencies.stoppedDiscoveries,
         containsAll([originalDiscovery, staleDiscovery]),
       );
+      expect(dependencies.discoveryStartCalls, 2);
+    });
+
+    test('stopDiscovery propagates stop failure and permits retry', () async {
+      final dependencies = _FakeDiscoveryDependencies();
+      final service = dependencies.createService();
+      addTearDown(service.dispose);
+      await service.startDiscovery();
+      final discovery = dependencies.discoveries.single;
+      final failure = StateError('simulated discovery stop failure');
+      dependencies.discoveryStopSteps.add((_) => Future<void>.error(failure));
+
+      final stopping = service.stopDiscovery();
+      final restarting = service.startDiscovery();
+      await Future.wait([
+        expectLater(stopping, throwsA(same(failure))),
+        expectLater(restarting, throwsA(same(failure))),
+      ]);
+
+      expect(dependencies.discoveryStopCalls, 1);
+      expect(dependencies.stoppedDiscoveries, isEmpty);
+      expect(service.startDiscovery, throwsStateError);
+      expect(dependencies.discoveryStartCalls, 1);
+
+      await service.stopDiscovery();
+
+      expect(dependencies.discoveryStopCalls, 2);
+      expect(dependencies.stoppedDiscoveries, [discovery]);
+
+      await service.startDiscovery();
       expect(dependencies.discoveryStartCalls, 2);
     });
 
