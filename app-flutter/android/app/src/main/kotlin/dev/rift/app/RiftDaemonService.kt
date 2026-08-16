@@ -68,13 +68,12 @@ class RiftDaemonService : Service() {
     private var mediaObserver: AndroidMediaSessionObserver? = null
     private var remoteMediaPlaybackManager: RemoteMediaPlaybackManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var runtimeGeneration = 1
     private var runtimeShutdownStarted = false
     private var stopServiceAfterShutdown = false
-    private val runtimeFinalizer = RuntimeShutdownFinalizer(::finalizeRuntime)
-    private val shutdownFallback = Runnable {
-        Log.w(logTag, "Shutdown fallback triggered")
-        completeRuntimeShutdown()
-    }
+    private var restartAfterShutdown = false
+    private var runtimeFinalizer = RuntimeShutdownFinalizer(::finalizeRuntime)
+    private var shutdownFallback: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -100,6 +99,15 @@ class RiftDaemonService : Service() {
                         0
                     },
                 )
+                if (runtimeShutdownStarted) {
+                    restartAfterShutdown = true
+                    Log.i(
+                        logTag,
+                        "Restart queued until runtime shutdown completes " +
+                            "generation=$runtimeGeneration",
+                    )
+                    return START_STICKY
+                }
                 startBackgroundRuntime()
                 return START_STICKY
             }
@@ -121,19 +129,35 @@ class RiftDaemonService : Service() {
         }
 
         runtimeShutdownStarted = true
-        Log.i(logTag, "Android service shutdown requested")
+        val shutdownGeneration = runtimeGeneration
+        Log.i(
+            logTag,
+            "Android service shutdown requested generation=$shutdownGeneration",
+        )
         if (engine == null) {
-            completeRuntimeShutdown()
+            completeRuntimeShutdown(shutdownGeneration)
             return
         }
 
-        mainHandler.postDelayed(shutdownFallback, shutdownFallbackDelayMs)
+        val fallback = Runnable {
+            Log.w(
+                logTag,
+                "Shutdown fallback triggered generation=$shutdownGeneration",
+            )
+            completeRuntimeShutdown(shutdownGeneration)
+        }
+        shutdownFallback = fallback
+        mainHandler.postDelayed(fallback, shutdownFallbackDelayMs)
         try {
             RiftBackgroundHost.requestRuntimeShutdown(
                 object : MethodChannel.Result {
                     override fun success(result: Any?) {
-                        Log.i(logTag, "Dart runtime shutdown acknowledged")
-                        completeRuntimeShutdown()
+                        Log.i(
+                            logTag,
+                            "Dart runtime shutdown acknowledged " +
+                                "generation=$shutdownGeneration",
+                        )
+                        completeRuntimeShutdown(shutdownGeneration)
                     }
 
                     override fun error(
@@ -143,20 +167,26 @@ class RiftDaemonService : Service() {
                     ) {
                         Log.w(
                             logTag,
-                            "Dart runtime shutdown failed: $errorCode $errorMessage",
+                            "Dart runtime shutdown failed " +
+                                "generation=$shutdownGeneration: " +
+                                "$errorCode $errorMessage",
                         )
-                        completeRuntimeShutdown()
+                        completeRuntimeShutdown(shutdownGeneration)
                     }
 
                     override fun notImplemented() {
-                        Log.w(logTag, "Dart runtime shutdown is not implemented")
-                        completeRuntimeShutdown()
+                        Log.w(
+                            logTag,
+                            "Dart runtime shutdown is not implemented " +
+                                "generation=$shutdownGeneration",
+                        )
+                        completeRuntimeShutdown(shutdownGeneration)
                     }
                 },
             )
         } catch (error: Exception) {
             Log.w(logTag, "Unable to request Dart runtime shutdown", error)
-            completeRuntimeShutdown()
+            completeRuntimeShutdown(shutdownGeneration)
         }
     }
 
@@ -168,9 +198,26 @@ class RiftDaemonService : Service() {
         remoteMediaPlaybackManager = null
     }
 
-    private fun completeRuntimeShutdown() {
-        mainHandler.removeCallbacks(shutdownFallback)
+    private fun completeRuntimeShutdown(shutdownGeneration: Int) {
+        if (shutdownGeneration != runtimeGeneration || !runtimeShutdownStarted) {
+            return
+        }
+        shutdownFallback?.let(mainHandler::removeCallbacks)
+        shutdownFallback = null
         if (!runtimeFinalizer.finalizeOnce()) {
+            return
+        }
+        if (restartAfterShutdown) {
+            restartAfterShutdown = false
+            stopServiceAfterShutdown = false
+            runtimeShutdownStarted = false
+            runtimeGeneration += 1
+            runtimeFinalizer = RuntimeShutdownFinalizer(::finalizeRuntime)
+            Log.i(
+                logTag,
+                "Starting queued service runtime generation=$runtimeGeneration",
+            )
+            startBackgroundRuntime()
             return
         }
         if (stopServiceAfterShutdown) {
