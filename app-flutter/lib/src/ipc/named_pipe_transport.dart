@@ -544,9 +544,11 @@ class Win32NamedPipeIo implements NamedPipeWorkerIo {
     try {
       final handle = CreateFile(namePointer, GENERIC_READ | GENERIC_WRITE, 0,
           dffi.nullptr, OPEN_EXISTING, 0, 0);
-      return handle == INVALID_HANDLE_VALUE
-          ? PipeOpenResult.failure(GetLastError())
-          : PipeOpenResult.success(handle);
+      if (handle == INVALID_HANDLE_VALUE) {
+        final errorCode = GetLastError();
+        return PipeOpenResult.failure(errorCode);
+      }
+      return PipeOpenResult.success(handle);
     } finally {
       ffi.calloc.free(namePointer);
     }
@@ -556,9 +558,11 @@ class Win32NamedPipeIo implements NamedPipeWorkerIo {
   PipePeekResult peekAvailable(int handle) {
     final ok = PeekNamedPipe(
         handle, dffi.nullptr, 0, dffi.nullptr, available, dffi.nullptr);
-    return ok == 0
-        ? PipePeekResult.failure(GetLastError())
-        : PipePeekResult.success(available.value);
+    if (ok == 0) {
+      final errorCode = GetLastError();
+      return PipePeekResult.failure(errorCode);
+    }
+    return PipePeekResult.success(available.value);
   }
 
   @override
@@ -566,10 +570,13 @@ class Win32NamedPipeIo implements NamedPipeWorkerIo {
     final buffer = ffi.calloc<dffi.Uint8>(maxBytes);
     try {
       final ok = ReadFile(handle, buffer, maxBytes, transferred, dffi.nullptr);
-      return ok == 0
-          ? PipeReadResult.failure(GetLastError())
-          : PipeReadResult.success(
-              Uint8List.fromList(buffer.asTypedList(transferred.value)));
+      if (ok == 0) {
+        final errorCode = GetLastError();
+        return PipeReadResult.failure(errorCode);
+      }
+      return PipeReadResult.success(
+        Uint8List.fromList(buffer.asTypedList(transferred.value)),
+      );
     } finally {
       ffi.calloc.free(buffer);
     }
@@ -583,9 +590,11 @@ class Win32NamedPipeIo implements NamedPipeWorkerIo {
       buffer.asTypedList(remaining).setRange(0, remaining, data, offset);
       final ok =
           WriteFile(handle, buffer, remaining, transferred, dffi.nullptr);
-      return ok == 0
-          ? PipeWriteResult.failure(GetLastError())
-          : PipeWriteResult.success(transferred.value);
+      if (ok == 0) {
+        final errorCode = GetLastError();
+        return PipeWriteResult.failure(errorCode);
+      }
+      return PipeWriteResult.success(transferred.value);
     } finally {
       ffi.calloc.free(buffer);
     }
