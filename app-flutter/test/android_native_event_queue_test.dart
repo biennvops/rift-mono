@@ -547,6 +547,33 @@ void main() {
     });
   });
 
+  test('dispose drops queued work and rejects later native events', () async {
+    var dispatches = 0;
+    final queue = AndroidNativeEventQueue(
+      dispatch: (event) async {
+        dispatches += 1;
+        return AndroidNativeEventDispatchResult.delivered;
+      },
+    )..onConnected();
+    queue.setNotificationPolicyReady(false);
+    queue.enqueue(notificationEvent('posted', 'notification-1'));
+    queue.enqueue(mediaAction('play', playbackId: 'playback-1'));
+
+    queue.dispose();
+    queue.dispose();
+
+    expect(queue.isDisposed, isTrue);
+    expect(queue, isEmpty);
+    expect(
+      queue.enqueue(mediaAction('pause', playbackId: 'playback-2')),
+      isFalse,
+    );
+    queue.onConnected();
+    await queue.flush();
+    expect(queue.isConnected, isFalse);
+    expect(dispatches, 0);
+  });
+
   test('diagnostics do not include notification content', () {
     final logs = <String>[];
     final queue = AndroidNativeEventQueue(

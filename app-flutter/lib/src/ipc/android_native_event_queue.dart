@@ -83,6 +83,7 @@ class AndroidNativeEventQueue {
   bool _notificationPolicyReady = false;
   int _connectionGeneration = 0;
   bool _flushRequested = false;
+  bool _disposed = false;
   Completer<void>? _activeFlush;
 
   int get length => _events.length;
@@ -95,11 +96,13 @@ class AndroidNativeEventQueue {
 
   int get connectionGeneration => _connectionGeneration;
 
+  bool get isDisposed => _disposed;
+
   List<AndroidNativeEvent> get queuedEvents =>
       List<AndroidNativeEvent>.unmodifiable(_events);
 
   void onConnected() {
-    if (_isConnected) {
+    if (_disposed || _isConnected) {
       return;
     }
     if (_connectionGeneration == 0) {
@@ -114,6 +117,7 @@ class AndroidNativeEventQueue {
   }
 
   void onConnectionLost() {
+    if (_disposed) return;
     if (_isConnected) {
       _connectionGeneration += 1;
     }
@@ -138,7 +142,7 @@ class AndroidNativeEventQueue {
   }
 
   void setNotificationPolicyReady(bool isReady) {
-    if (_notificationPolicyReady == isReady) {
+    if (_disposed || _notificationPolicyReady == isReady) {
       return;
     }
     _notificationPolicyReady = isReady;
@@ -149,6 +153,10 @@ class AndroidNativeEventQueue {
   }
 
   bool enqueue(Map<String, dynamic> payload) {
+    if (_disposed) {
+      _log('native event dropped because queue is disposed');
+      return false;
+    }
     final validation = _validate(payload);
     final event = validation.event;
     if (event == null) {
@@ -199,6 +207,9 @@ class AndroidNativeEventQueue {
   }
 
   Future<void> flush() {
+    if (_disposed) {
+      return Future<void>.value();
+    }
     _flushRequested = true;
     final activeFlush = _activeFlush;
     if (activeFlush != null) {
@@ -477,6 +488,21 @@ class AndroidNativeEventQueue {
       'capacity=$capacity',
     );
     return true;
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _isConnected = false;
+    _notificationPolicyReady = false;
+    _connectionGeneration += 1;
+    _flushRequested = false;
+    final droppedEvents = _events.length;
+    _events.clear();
+    _log(
+      'native event queue disposed generation=$_connectionGeneration '
+      'droppedEvents=$droppedEvents',
+    );
   }
 
   void _wakeActiveFlush() {
