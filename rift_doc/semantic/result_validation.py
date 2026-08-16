@@ -142,6 +142,8 @@ def validate_semantic_output(
             category="FABRICATED_CITATION",
         )
     if task.metadata.get("requires_two_sided_contradiction", False):
+        if status == "FAIL":
+            _validate_two_sided_failure(set(evidence_refs), task, packet)
         for left, right in contradiction_sides:
             _validate_contradiction_origins(left, right, packet)
     if payload["contradictions"] and status != "FAIL":
@@ -185,6 +187,86 @@ def _parse_payload(raw: str | bytes | Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SemanticOutputError("semantic output must be one JSON object", category="JSON_INVALID")
     return payload
+
+
+def _validate_two_sided_failure(
+    evidence_refs: set[str],
+    task: SemanticReviewTask,
+    packet: EvidencePacket,
+) -> None:
+    by_id = {item.evidence_id: item for item in packet.all_evidence}
+    source_domains = _domain_values(task.metadata.get("source_domain"))
+    target_domains = _domain_values(task.metadata.get("target_domain"))
+    source_entities = _string_values([task.metadata.get("source_entity_id")])
+    target_entities = _string_values(task.metadata.get("target_entity_ids", []))
+
+    if (source_domains or source_entities) and (target_domains or target_entities):
+        source_refs = {
+            value
+            for value in evidence_refs
+            if _matches_side(by_id[value], source_domains, source_entities)
+        }
+        target_refs = {
+            value
+            for value in evidence_refs
+            if _matches_side(by_id[value], target_domains, target_entities)
+        }
+        if any(source != target for source in source_refs for target in target_refs):
+            return
+    else:
+        origins = {_primary_origin(by_id[value]) for value in evidence_refs}
+        if len(origins) >= 2:
+            return
+
+    raise SemanticOutputError(
+        "semantic FAIL must cite distinct evidence from both source and target provenance",
+        category="TWO_SIDED_CITATION_INVALID",
+    )
+
+
+def _matches_side(
+    evidence: Any,
+    domains: set[str],
+    entity_ids: set[str],
+) -> bool:
+    entity_id = str(evidence.metadata.get("entity_id") or "")
+    if entity_id and entity_id in entity_ids:
+        return True
+    report = _normalize_domain(evidence.report)
+    if report and report in domains:
+        return True
+    return bool(
+        domains.intersection({"repository", "repositoryevidence"})
+        and (
+            evidence.kind.startswith("repository_")
+            or evidence.metadata.get("repository_evidence_id")
+        )
+    )
+
+
+def _primary_origin(evidence: Any) -> tuple[str, str]:
+    if evidence.report:
+        return ("report", _normalize_domain(evidence.report))
+    if evidence.metadata.get("entity_id"):
+        return ("entity", str(evidence.metadata["entity_id"]))
+    if evidence.source_path:
+        return ("path", str(evidence.source_path))
+    return ("kind", str(evidence.kind))
+
+
+def _domain_values(value: Any) -> set[str]:
+    raw_values = value if isinstance(value, (list, tuple, set)) else str(value or "").split(",")
+    return {_normalize_domain(item) for item in raw_values if _normalize_domain(item)}
+
+
+def _string_values(values: Any) -> set[str]:
+    if not isinstance(values, (list, tuple, set)):
+        values = [values]
+    return {str(value) for value in values if value not in (None, "")}
+
+
+def _normalize_domain(value: Any) -> str:
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
 
 
 def _validate_contradiction_origins(

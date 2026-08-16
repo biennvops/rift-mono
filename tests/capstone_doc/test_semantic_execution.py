@@ -261,6 +261,28 @@ def test_contradiction_requires_distinct_citations_from_both_sides() -> None:
     assert result.status == "FAIL"
 
 
+def test_two_sided_failure_requires_source_and_target_evidence() -> None:
+    task = _task(
+        task_type=SemanticTaskType.REQUIREMENT_TEST_ALIGNMENT,
+        two_sided=True,
+    )
+    packet = _packet(task)
+
+    with pytest.raises(SemanticOutputError, match="source and target provenance"):
+        validate_semantic_output(
+            _response("FAIL", evidence_refs=["doc-left"], contradictions=[]),
+            task,
+            packet,
+        )
+
+    result = validate_semantic_output(
+        _response("FAIL", evidence_refs=["doc-left", "doc-right"], contradictions=[]),
+        task,
+        packet,
+    )
+    assert result.status == "FAIL"
+
+
 def test_required_secret_or_budget_gap_returns_review_without_provider_call() -> None:
     packet = _packet()
     packet.excluded_evidence = [
