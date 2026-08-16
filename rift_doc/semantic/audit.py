@@ -172,22 +172,7 @@ class SemanticAuditRunner:
         estimated_cost = 0.0
         for task, packet in zip(plan.tasks, plan.packets, strict=True):
             prompt = self.prompt_renderer.render(task, packet)
-            task_cost = _estimated_task_cost(prompt, provider)
-            if prompt.estimated_input_tokens > self.options.max_input_tokens:
-                execution = self._system_execution(
-                    task,
-                    packet,
-                    "INPUT_LIMIT",
-                    "Semantic review was not called because the rendered prompt exceeds the configured input-token limit.",
-                )
-            elif self.options.max_cost is not None and estimated_cost + task_cost > self.options.max_cost:
-                execution = self._system_execution(
-                    task,
-                    packet,
-                    "COST_LIMIT",
-                    "Semantic review was not called because the configured cost limit would be exceeded.",
-                )
-            elif _has_required_evidence_gap(packet):
+            if _has_required_evidence_gap(packet):
                 execution = self._system_execution(
                     task,
                     packet,
@@ -205,8 +190,14 @@ class SemanticAuditRunner:
                     "The task requires visual evidence, but bounded image bytes or provider visual support are unavailable.",
                 )
             else:
-                execution = self._execute_provider(task, packet, provider, prompt=prompt)
-                estimated_cost += task_cost
+                execution = self._execute_provider(
+                    task,
+                    packet,
+                    provider,
+                    prompt=prompt,
+                    consumed_cost=estimated_cost,
+                )
+                estimated_cost += _estimated_attempt_cost(prompt, provider) * execution.attempts
             executions.append(execution)
             finding = _semantic_finding(execution)
             findings.append(finding)
@@ -242,6 +233,7 @@ class SemanticAuditRunner:
         provider: LLMProvider,
         *,
         prompt: RenderedPrompt | None = None,
+        consumed_cost: float = 0.0,
     ) -> SemanticTaskExecution:
         prompt = prompt or self.prompt_renderer.render(task, packet)
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -284,6 +276,22 @@ class SemanticAuditRunner:
                         cached=True,
                         audit_metadata=metadata,
                     )
+
+        if prompt.estimated_input_tokens > self.options.max_input_tokens:
+            return self._system_execution(
+                task,
+                packet,
+                "INPUT_LIMIT",
+                "Semantic review was not called because the rendered prompt exceeds the configured input-token limit.",
+            )
+        task_cost = _estimated_task_cost(prompt, provider)
+        if self.options.max_cost is not None and consumed_cost + task_cost > self.options.max_cost:
+            return self._system_execution(
+                task,
+                packet,
+                "COST_LIMIT",
+                "Semantic review was not called because the configured cost limit would be exceeded.",
+            )
 
         errors: list[dict[str, str]] = []
         max_attempts = provider.config.retry_attempts + 1
@@ -463,12 +471,16 @@ def _has_required_evidence_gap(packet: EvidencePacket) -> bool:
 
 
 def _estimated_task_cost(prompt: RenderedPrompt, provider: LLMProvider) -> float:
+    return _estimated_attempt_cost(prompt, provider) * (provider.config.retry_attempts + 1)
+
+
+def _estimated_attempt_cost(prompt: RenderedPrompt, provider: LLMProvider) -> float:
     input_rate = provider.config.input_cost_per_million or 0.0
     output_rate = provider.config.output_cost_per_million or 0.0
     return (
         prompt.estimated_input_tokens * input_rate
         + provider.config.max_output_tokens * output_rate
-    ) * (provider.config.retry_attempts + 1) / 1_000_000
+    ) / 1_000_000
 
 
 def _has_pricing(provider: LLMProvider) -> bool:

@@ -337,6 +337,78 @@ def test_cache_reuses_valid_result_and_packet_change_invalidates_key(tmp_path: P
     assert changed_packet.packet_hash != packet.packet_hash
 
 
+def test_cached_result_bypasses_zero_cost_limit(tmp_path: Path) -> None:
+    packet = _packet()
+    cache_directory = tmp_path / "cache"
+    seed_runner = SemanticAuditRunner(
+        _spec(),
+        options=SemanticAuditOptions(cache_enabled=True, cache_directory=cache_directory),
+    )
+    seed_runner.run(_plan(packet), FakeLLMProvider([_response()]))
+
+    cached_provider = FakeLLMProvider([])
+    cached_provider.config = replace(
+        cached_provider.config,
+        input_cost_per_million=1.0,
+        output_cost_per_million=0.0,
+    )
+    report = SemanticAuditRunner(
+        _spec(),
+        options=SemanticAuditOptions(
+            cache_enabled=True,
+            cache_directory=cache_directory,
+            max_cost=0,
+        ),
+    ).run(_plan(packet), cached_provider)
+
+    assert cached_provider.calls == []
+    assert report.executions[0].execution_status == "CACHED"
+    assert report.metadata["estimated_cost"] == 0
+
+
+def test_cache_hit_does_not_consume_later_task_cost_budget(tmp_path: Path) -> None:
+    cached_packet = _packet()
+    uncached_packet = _packet(right="TC-41 checks forwarding but omits remote dismissal.")
+    cache_directory = tmp_path / "cache"
+    seed_runner = SemanticAuditRunner(
+        _spec(),
+        options=SemanticAuditOptions(cache_enabled=True, cache_directory=cache_directory),
+    )
+    seed_runner.run(_plan(cached_packet), FakeLLMProvider([_response()]))
+
+    provider = FakeLLMProvider([_response()], retry_attempts=1)
+    provider.config = replace(
+        provider.config,
+        input_cost_per_million=1.0,
+        output_cost_per_million=0.0,
+    )
+    cached_tokens = PromptRenderer().render(
+        cached_packet.task, cached_packet
+    ).estimated_input_tokens
+    uncached_tokens = PromptRenderer().render(
+        uncached_packet.task, uncached_packet
+    ).estimated_input_tokens
+    max_cost = max(cached_tokens, uncached_tokens) * 2 / 1_000_000
+    plan = SemanticPlan(
+        [cached_packet.task, uncached_packet.task],
+        [cached_packet, uncached_packet],
+        proposed_task_count=2,
+    )
+
+    report = SemanticAuditRunner(
+        _spec(),
+        options=SemanticAuditOptions(
+            cache_enabled=True,
+            cache_directory=cache_directory,
+            max_cost=max_cost,
+        ),
+    ).run(plan, provider)
+
+    assert [item.execution_status for item in report.executions] == ["CACHED", "COMPLETED"]
+    assert len(provider.calls) == 1
+    assert report.metadata["estimated_cost"] == pytest.approx(uncached_tokens / 1_000_000)
+
+
 def test_semantic_match_is_recorded_without_mutating_deterministic_graph() -> None:
     task = _task(task_type=SemanticTaskType.CROSS_DOCUMENT_CONSISTENCY)
     packet = _packet(task)
