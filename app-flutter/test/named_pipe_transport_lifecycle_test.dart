@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rift/src/ipc/named_pipe_transport.dart';
 
@@ -199,6 +200,24 @@ void main() {
   });
 
   group('NamedPipeWorkerSession', () {
+    test('zero-error open failure remains retryable', () {
+      fakeAsync((async) {
+        final io = _FakeIo()
+          ..openResults.addAll(const [
+            PipeOpenResult.failure(0),
+            PipeOpenResult.success(7),
+          ]);
+        final harness = _SessionHarness(io)..start();
+
+        expect(harness.events, isEmpty);
+        async.elapse(const Duration(milliseconds: 50));
+
+        expect(harness.events.single['type'], 'pipeConnected');
+        expect(io.openCalls, 2);
+        harness.close();
+      });
+    });
+
     test('failed peek is fatal and closes handle exactly once', () {
       final io = _FakeIo()..peekResults.add(const PipePeekResult.failure(109));
       final harness = _SessionHarness(io)..start();
@@ -413,15 +432,23 @@ class _SessionHarness {
 }
 
 class _FakeIo implements NamedPipeWorkerIo {
+  final openResults = <PipeOpenResult>[];
   final peekResults = <PipePeekResult>[];
   final readResults = <PipeReadResult>[];
   final writeResults = <PipeWriteResult>[];
   final writes = <List<int>>[];
+  int openCalls = 0;
   int readCalls = 0;
   int closeCalls = 0;
 
   @override
-  PipeOpenResult openClientPipe(String name) => const PipeOpenResult.success(7);
+  PipeOpenResult openClientPipe(String name) {
+    openCalls++;
+    return openResults.isEmpty
+        ? const PipeOpenResult.success(7)
+        : openResults.removeAt(0);
+  }
+
   @override
   PipePeekResult peekAvailable(int handle) => peekResults.isEmpty
       ? const PipePeekResult.success(0)
