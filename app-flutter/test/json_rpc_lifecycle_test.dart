@@ -9,6 +9,76 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('JsonRpcRiftClient connection lifecycle', () {
+    test('failed transport connect is disconnected before error propagates',
+        () async {
+      final transport = _LifecycleTransport()
+        ..failNextConnect(StateError('connect failed'));
+      final client = JsonRpcRiftClient(transport);
+
+      await expectLater(client.connect(), throwsStateError);
+
+      expect(transport.connectionAttempts, 1);
+      expect(transport.disconnectCalls, 1);
+      expect(client.isConnected, isFalse);
+      await client.dispose();
+      await transport.dispose();
+    });
+
+    test('retry cannot begin until failed-attempt cleanup completes', () async {
+      final cleanupGate = Completer<void>();
+      final transport = _LifecycleTransport()
+        ..failNextConnect(StateError('connect failed'))
+        ..blockNextDisconnect(cleanupGate.future);
+      final peer = _ControlledPeer();
+      final client = JsonRpcRiftClient(
+        transport,
+        peerFactory: (_) => peer,
+      );
+
+      final firstConnect = client.connect();
+      final firstExpectation = expectLater(firstConnect, throwsStateError);
+      await pumpEventQueue();
+      expect(transport.connectionAttempts, 1);
+      expect(transport.disconnectCalls, 1);
+
+      final joinedConnect = client.connect();
+      final joinedExpectation = expectLater(joinedConnect, throwsStateError);
+      await pumpEventQueue();
+      expect(transport.connectionAttempts, 1);
+
+      cleanupGate.complete();
+      await firstExpectation;
+      await joinedExpectation;
+
+      await client.connect();
+      expect(transport.connectionAttempts, 2);
+      expect(client.isConnected, isTrue);
+
+      await client.dispose();
+      peer.completeListen();
+      await transport.dispose();
+    });
+
+    test('failed peer setup closes peer, output, and transport', () async {
+      final transport = _LifecycleTransport();
+      final peer = _ControlledPeer(failRegistrationAt: 1);
+      final client = JsonRpcRiftClient(
+        transport,
+        peerFactory: (_) => peer,
+      );
+
+      await expectLater(client.connect(), throwsStateError);
+
+      expect(peer.closeCalls, 1);
+      expect(transport.lastConnection?.outgoing.isClosed, isTrue);
+      expect(transport.disconnectCalls, 1);
+      expect(transport.isConnected, isFalse);
+      expect(client.isConnected, isFalse);
+
+      await client.dispose();
+      await transport.dispose();
+    });
+
     test('stale peer completion cannot tear down replacement', () async {
       final transport = _LifecycleTransport();
       final peers = <_ControlledPeer>[];
@@ -238,12 +308,25 @@ class _LifecycleTransport implements IpcTransport {
   final List<_TransportConnection> _connections = [];
   _TransportConnection? _currentConnection;
   Future<void>? _nextConnectGate;
+  Future<void>? _nextDisconnectGate;
+  Object? _nextConnectError;
   int connectionAttempts = 0;
   int disconnectCalls = 0;
   bool isConnected = false;
 
+  _TransportConnection? get lastConnection =>
+      _connections.isEmpty ? null : _connections.last;
+
   void blockNextConnect(Future<void> gate) {
     _nextConnectGate = gate;
+  }
+
+  void blockNextDisconnect(Future<void> gate) {
+    _nextDisconnectGate = gate;
+  }
+
+  void failNextConnect(Object error) {
+    _nextConnectError = error;
   }
 
   @override
@@ -253,6 +336,11 @@ class _LifecycleTransport implements IpcTransport {
     _nextConnectGate = null;
     if (connectGate != null) {
       await connectGate;
+    }
+    final connectError = _nextConnectError;
+    _nextConnectError = null;
+    if (connectError != null) {
+      throw connectError;
     }
     final connection = _TransportConnection();
     _connections.add(connection);
@@ -265,6 +353,11 @@ class _LifecycleTransport implements IpcTransport {
   Future<void> disconnect() async {
     disconnectCalls += 1;
     isConnected = false;
+    final disconnectGate = _nextDisconnectGate;
+    _nextDisconnectGate = null;
+    if (disconnectGate != null) {
+      await disconnectGate;
+    }
     final connection = _currentConnection;
     _currentConnection = null;
     await connection?.close();
@@ -296,12 +389,14 @@ class _TransportConnection {
 }
 
 class _ControlledPeer implements json_rpc.Peer {
-  _ControlledPeer({this.closeGate});
+  _ControlledPeer({this.closeGate, this.failRegistrationAt});
 
   final Future<void>? closeGate;
+  final int? failRegistrationAt;
   final Completer<void> _listenCompleter = Completer<void>();
   bool _isClosed = false;
   int closeCalls = 0;
+  int _registrationCalls = 0;
 
   void completeListen() {
     if (!_listenCompleter.isCompleted) {
@@ -332,7 +427,12 @@ class _ControlledPeer implements json_rpc.Peer {
   bool get strictProtocolChecks => true;
 
   @override
-  void registerMethod(String name, Function callback) {}
+  void registerMethod(String name, Function callback) {
+    _registrationCalls += 1;
+    if (_registrationCalls == failRegistrationAt) {
+      throw StateError('peer registration failed');
+    }
+  }
 
   @override
   void registerFallback(void Function(json_rpc.Parameters) callback) {}

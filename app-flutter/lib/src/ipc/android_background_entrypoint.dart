@@ -33,6 +33,62 @@ Future<bool> restoreSavedNotificationSyncPolicyBeforeFlush(
   }
 }
 
+class AndroidBackgroundRuntimeShutdown {
+  AndroidBackgroundRuntimeShutdown({
+    required FutureOr<void> Function() stopEventProducers,
+    required FutureOr<void> Function() disposeRemoteMedia,
+    required FutureOr<void> Function() disposeDeviceStatusPublisher,
+    required FutureOr<void> Function() disposeClient,
+    required FutureOr<void> Function() drainOwnedWork,
+    void Function(String message)? logger,
+  })  : _stopEventProducers = stopEventProducers,
+        _disposeRemoteMedia = disposeRemoteMedia,
+        _disposeDeviceStatusPublisher = disposeDeviceStatusPublisher,
+        _disposeClient = disposeClient,
+        _drainOwnedWork = drainOwnedWork,
+        _logger = logger;
+
+  final FutureOr<void> Function() _stopEventProducers;
+  final FutureOr<void> Function() _disposeRemoteMedia;
+  final FutureOr<void> Function() _disposeDeviceStatusPublisher;
+  final FutureOr<void> Function() _disposeClient;
+  final FutureOr<void> Function() _drainOwnedWork;
+  final void Function(String message)? _logger;
+  Future<void>? _shutdownFuture;
+  bool _isShuttingDown = false;
+
+  bool get isShuttingDown => _isShuttingDown;
+
+  Future<void> shutdown() {
+    _isShuttingDown = true;
+    return _shutdownFuture ??= _performShutdown();
+  }
+
+  Future<void> _performShutdown() async {
+    _logger?.call('Dart runtime shutdown started');
+    await _runStep('event producers', _stopEventProducers);
+    final remoteMediaDispose = _runStep('remote media', _disposeRemoteMedia);
+    final deviceStatusDispose =
+        _runStep('device status', _disposeDeviceStatusPublisher);
+    await _runStep('JSON-RPC client', _disposeClient);
+    await remoteMediaDispose;
+    await deviceStatusDispose;
+    await _runStep('owned async work', _drainOwnedWork);
+    _logger?.call('Dart runtime shutdown complete');
+  }
+
+  Future<void> _runStep(
+    String owner,
+    FutureOr<void> Function() dispose,
+  ) async {
+    try {
+      await dispose();
+    } catch (error) {
+      _logger?.call('Failed to dispose $owner: $error');
+    }
+  }
+}
+
 Future<void> runAndroidBackgroundMain() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -42,6 +98,13 @@ Future<void> runAndroidBackgroundMain() async {
       await MirroredNotificationRegistry.load();
   Future<String?>? localDeviceIdFuture;
   Future<void> mirroredNotificationLifecycleQueue = Future<void>.value();
+  final ownedSubscriptions = <StreamSubscription<dynamic>>[];
+  DeviceStatusPublisher? deviceStatusPublisher;
+  Future<void>? deviceStatusPublisherStart;
+  AndroidRemoteMediaPlaybackCoordinator? remoteMedia;
+  Future<void>? remoteMediaStart;
+  Future<void>? nativeEventQueueDispose;
+  late final AndroidBackgroundRuntimeShutdown runtimeShutdown;
 
   Future<void> enqueueMirroredNotificationLifecycle(
     Future<void> Function() operation,
@@ -104,6 +167,9 @@ Future<void> runAndroidBackgroundMain() async {
   Future<AndroidNativeEventDispatchResult> dispatchNativeEvent(
     AndroidNativeEvent event,
   ) async {
+    if (runtimeShutdown.isShuttingDown) {
+      return AndroidNativeEventDispatchResult.drop;
+    }
     try {
       final payload = Map<String, Object?>.from(event.payload)
         ..remove('eventType');
@@ -145,10 +211,59 @@ Future<void> runAndroidBackgroundMain() async {
     dispatch: dispatchNativeEvent,
     logger: (message) => debugPrint('[Android Native Event Queue] $message'),
   );
+  runtimeShutdown = AndroidBackgroundRuntimeShutdown(
+    stopEventProducers: () async {
+      nativeEventQueueDispose ??= nativeEventQueue.dispose();
+      final subscriptions = List<StreamSubscription<dynamic>>.of(
+        ownedSubscriptions,
+      );
+      ownedSubscriptions.clear();
+      for (final subscription in subscriptions) {
+        try {
+          await subscription.cancel();
+        } catch (error) {
+          debugPrint(
+            '[Android Background] Failed to cancel subscription: $error',
+          );
+        }
+      }
+    },
+    disposeRemoteMedia: () async {
+      final owner = remoteMedia;
+      remoteMedia = null;
+      await owner?.dispose();
+    },
+    disposeDeviceStatusPublisher: () async {
+      final owner = deviceStatusPublisher;
+      deviceStatusPublisher = null;
+      await owner?.dispose();
+    },
+    disposeClient: client.dispose,
+    drainOwnedWork: () async {
+      try {
+        await nativeEventQueueDispose;
+      } catch (_) {}
+      final remoteStart = remoteMediaStart;
+      final deviceStatusStart = deviceStatusPublisherStart;
+      remoteMediaStart = null;
+      deviceStatusPublisherStart = null;
+      try {
+        await remoteStart;
+      } catch (_) {}
+      try {
+        await deviceStatusStart;
+      } catch (_) {}
+      try {
+        await mirroredNotificationLifecycleQueue;
+      } catch (_) {}
+    },
+    logger: (message) => debugPrint('[Android Background] $message'),
+  );
 
   Future<void> handleIncomingNotificationAction(
     Map<String, dynamic> request,
   ) async {
+    if (runtimeShutdown.isShuttingDown) return;
     final requestId = request['requestId']?.toString();
     final notificationId = request['notificationId']?.toString();
     final action = request['action']?.toString();
@@ -198,6 +313,7 @@ Future<void> runAndroidBackgroundMain() async {
   Future<void> handleIncomingMediaPlaybackAction(
     Map<String, dynamic> request,
   ) async {
+    if (runtimeShutdown.isShuttingDown) return;
     final requestId = request['requestId']?.toString();
     final playbackId = request['playbackId']?.toString();
     final action = request['action']?.toString();
@@ -249,17 +365,25 @@ Future<void> runAndroidBackgroundMain() async {
     }
   }
 
-  client.onNotificationActionRequest.listen((request) {
-    unawaited(handleIncomingNotificationAction(request));
-  });
+  ownedSubscriptions.add(
+    client.onNotificationActionRequest.listen((request) {
+      unawaited(handleIncomingNotificationAction(request));
+    }),
+  );
 
-  client.onMediaPlaybackActionRequest.listen((request) {
-    unawaited(handleIncomingMediaPlaybackAction(request));
-  });
+  ownedSubscriptions.add(
+    client.onMediaPlaybackActionRequest.listen((request) {
+      unawaited(handleIncomingMediaPlaybackAction(request));
+    }),
+  );
 
   _backgroundBridgeChannel.setMethodCallHandler((call) async {
     switch (call.method) {
+      case 'shutdown':
+        await runtimeShutdown.shutdown();
+        return true;
       case 'uiRequest':
+        if (runtimeShutdown.isShuttingDown) return false;
         final message = call.arguments;
         if (message is! String) {
           throw PlatformException(
@@ -270,6 +394,7 @@ Future<void> runAndroidBackgroundMain() async {
         await transport.sendRaw(message);
         return true;
       case 'nativeEvent':
+        if (runtimeShutdown.isShuttingDown) return false;
         final event = call.arguments;
         if (event is Map) {
           nativeEventQueue.enqueue(Map<String, dynamic>.from(event));
@@ -281,18 +406,28 @@ Future<void> runAndroidBackgroundMain() async {
     }
   });
 
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (_) {
+    if (runtimeShutdown.isShuttingDown) return;
+    rethrow;
+  }
+  if (runtimeShutdown.isShuttingDown) return;
   nativeEventQueue.onConnected();
   Future<void> restorePolicyAndFlushNativeEvents() async {
+    if (runtimeShutdown.isShuttingDown) return;
     nativeEventQueue.setNotificationPolicyReady(false);
     await nativeEventQueue.flush();
+    if (runtimeShutdown.isShuttingDown) return;
     final restored = await restoreSavedNotificationSyncPolicyBeforeFlush(
       client,
       () async {
+        if (runtimeShutdown.isShuttingDown) return;
         nativeEventQueue.setNotificationPolicyReady(true);
         await nativeEventQueue.flush();
       },
     );
+    if (runtimeShutdown.isShuttingDown) return;
     nativeEventQueue.setNotificationPolicyReady(restored);
     if (!restored) {
       await nativeEventQueue.flush();
@@ -300,35 +435,46 @@ Future<void> runAndroidBackgroundMain() async {
   }
 
   await restorePolicyAndFlushNativeEvents();
-  transport.rawIncoming.listen((message) {
-    unawaited(
-      _backgroundBridgeChannel.invokeMethod<void>('daemonMessage', message),
-    );
-  });
-  _backgroundBridgeChannel.invokeMethod<void>('backgroundReady');
+  if (runtimeShutdown.isShuttingDown) return;
+  ownedSubscriptions.add(
+    transport.rawIncoming.listen((message) {
+      if (!runtimeShutdown.isShuttingDown) {
+        unawaited(
+          _backgroundBridgeChannel.invokeMethod<void>('daemonMessage', message),
+        );
+      }
+    }),
+  );
+  unawaited(_backgroundBridgeChannel.invokeMethod<void>('backgroundReady'));
 
-  client.onConnectionChanged.listen((isConnected) {
-    if (isConnected) {
-      nativeEventQueue.onConnected();
-      unawaited(restorePolicyAndFlushNativeEvents());
-      unawaited(
-        enqueueMirroredNotificationLifecycle(
-          reconcileBackgroundMirroredNotificationPreviews,
-        ),
-      );
-    } else {
-      nativeEventQueue.onConnectionLost();
-    }
-  });
+  ownedSubscriptions.add(
+    client.onConnectionChanged.listen((isConnected) {
+      if (runtimeShutdown.isShuttingDown) return;
+      if (isConnected) {
+        nativeEventQueue.onConnected();
+        unawaited(restorePolicyAndFlushNativeEvents());
+        unawaited(
+          enqueueMirroredNotificationLifecycle(
+            reconcileBackgroundMirroredNotificationPreviews,
+          ),
+        );
+      } else {
+        nativeEventQueue.onConnectionLost();
+      }
+    }),
+  );
 
-  final deviceStatusPublisher = DeviceStatusPublisher(client);
-  unawaited(deviceStatusPublisher.start());
+  deviceStatusPublisher = DeviceStatusPublisher(client);
+  deviceStatusPublisherStart = deviceStatusPublisher!.start();
+  unawaited(deviceStatusPublisherStart);
 
-  final remoteMedia = AndroidRemoteMediaPlaybackCoordinator(client);
-  unawaited(remoteMedia.start());
+  remoteMedia = AndroidRemoteMediaPlaybackCoordinator(client);
+  remoteMediaStart = remoteMedia!.start();
+  unawaited(remoteMediaStart);
 
   Future<void> showMirroredNotification(Map<String, dynamic> event) async {
-    if (event['sourcePlatform']?.toString() == 'android') {
+    if (runtimeShutdown.isShuttingDown ||
+        event['sourcePlatform']?.toString() == 'android') {
       return;
     }
     final notificationId = event['notificationId']?.toString();
@@ -383,6 +529,7 @@ Future<void> runAndroidBackgroundMain() async {
   }
 
   Future<void> clearMirroredNotification(Map<String, dynamic> event) async {
+    if (runtimeShutdown.isShuttingDown) return;
     final notificationId = event['notificationId']?.toString();
     final sourceDeviceId = event['sourceDeviceId']?.toString();
     if (notificationId == null ||
@@ -409,20 +556,33 @@ Future<void> runAndroidBackgroundMain() async {
     }
   }
 
-  client.onNotificationPosted.listen((event) {
-    enqueueMirroredNotificationLifecycle(() => showMirroredNotification(event));
-  });
-  client.onNotificationUpdated.listen((event) {
-    enqueueMirroredNotificationLifecycle(() => showMirroredNotification(event));
-  });
-  client.onNotificationRemoved.listen((event) {
-    enqueueMirroredNotificationLifecycle(
-        () => clearMirroredNotification(event));
-  });
-
-  unawaited(
-    enqueueMirroredNotificationLifecycle(
-      reconcileBackgroundMirroredNotificationPreviews,
-    ),
+  ownedSubscriptions.add(
+    client.onNotificationPosted.listen((event) {
+      enqueueMirroredNotificationLifecycle(
+        () => showMirroredNotification(event),
+      );
+    }),
   );
+  ownedSubscriptions.add(
+    client.onNotificationUpdated.listen((event) {
+      enqueueMirroredNotificationLifecycle(
+        () => showMirroredNotification(event),
+      );
+    }),
+  );
+  ownedSubscriptions.add(
+    client.onNotificationRemoved.listen((event) {
+      enqueueMirroredNotificationLifecycle(
+        () => clearMirroredNotification(event),
+      );
+    }),
+  );
+
+  if (!runtimeShutdown.isShuttingDown) {
+    unawaited(
+      enqueueMirroredNotificationLifecycle(
+        reconcileBackgroundMirroredNotificationPreviews,
+      ),
+    );
+  }
 }

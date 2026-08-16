@@ -557,22 +557,28 @@ class JsonRpcRiftClient {
     if (disconnecting != null) {
       await disconnecting;
     }
+    final dirtyTransportEpoch = _transportOwnerEpoch;
+    if (dirtyTransportEpoch != null) {
+      await _disconnectTransport(dirtyTransportEpoch);
+    }
     if (!_canInstallConnection(epoch)) {
       return;
     }
 
     _log.info('Connecting to daemon (epoch=$epoch)...');
+    json_rpc.Peer? attemptPeer;
+    StreamController<String>? attemptOutController;
     try {
+      _transportOwnerEpoch = epoch;
       final channel = await _transport.connect();
       if (!_canInstallConnection(epoch)) {
-        if (!_intentionalDisconnect && !_disposed) {
-          await _disconnectTransport();
-        }
+        await _disconnectTransport(epoch);
         return;
       }
 
       // Wrap channel to log raw payload (Risk Mitigation: behavior mismatch)
       final outController = StreamController<String>(sync: true);
+      attemptOutController = outController;
       outController.stream.listen((event) {
         _log.fine('SEND: $event');
         channel.sink.add(event);
@@ -587,6 +593,7 @@ class JsonRpcRiftClient {
       );
 
       final peer = _peerFactory(loggingChannel);
+      attemptPeer = peer;
       _outController = outController;
       _client = peer;
 
@@ -960,17 +967,48 @@ class JsonRpcRiftClient {
       _setConnectionState(true);
       _reconnectAttempts = 0;
       _log.info('Connected to daemon successfully (epoch=$epoch)');
-    } catch (error) {
+    } catch (error, stackTrace) {
       _log.severe('Failed to connect (epoch=$epoch): $error');
-      if (_connectionEpoch == epoch && !_disposed) {
-        _setConnectionState(false);
-      }
-      rethrow;
+      await _cleanupFailedConnect(
+        epoch: epoch,
+        peer: attemptPeer,
+        outController: attemptOutController,
+      );
+      Error.throwWithStackTrace(error, stackTrace);
     }
+  }
+
+  Future<void> _cleanupFailedConnect({
+    required int epoch,
+    required json_rpc.Peer? peer,
+    required StreamController<String>? outController,
+  }) async {
+    if (peer != null && _ownsPeer(peer, epoch)) {
+      _client = null;
+    }
+    if (identical(_outController, outController)) {
+      _outController = null;
+    }
+    if (_connectionEpoch == epoch && !_disposed) {
+      _setConnectionState(false);
+    }
+    try {
+      await peer?.close();
+    } catch (error) {
+      _log.warning('Error while closing failed RPC peer: $error');
+    }
+    try {
+      await _closeOutputController(outController);
+    } catch (error) {
+      _log.warning('Error while closing failed RPC output: $error');
+    }
+    await _disconnectTransport(epoch);
+    _log.info('Transport cleanup complete (epoch=$epoch)');
   }
 
   int _reconnectAttempts = 0;
   int _connectionEpoch = 0;
+  int? _transportOwnerEpoch;
   Timer? _reconnectTimer;
   Future<void>? _connectFuture;
   Future<void>? _disconnectFuture;
@@ -1012,7 +1050,7 @@ class JsonRpcRiftClient {
     }
     _setConnectionState(false);
     unawaited(_closeOutputController(outController));
-    await _disconnectTransport();
+    await _disconnectTransport(epoch);
 
     if (_disposed ||
         _intentionalDisconnect ||
@@ -1031,15 +1069,22 @@ class JsonRpcRiftClient {
     }
   }
 
-  Future<void> _disconnectTransport() {
+  Future<void> _disconnectTransport([int? ownerEpoch]) {
+    if (ownerEpoch != null && _transportOwnerEpoch != ownerEpoch) {
+      return Future<void>.value();
+    }
     final pending = _transportDisconnectFuture;
     if (pending != null) {
       return pending;
     }
+    final disconnectedOwnerEpoch = _transportOwnerEpoch;
     final future = _performTransportDisconnect();
     _transportDisconnectFuture = future;
     unawaited(
       future.whenComplete(() {
+        if (_transportOwnerEpoch == disconnectedOwnerEpoch) {
+          _transportOwnerEpoch = null;
+        }
         if (identical(_transportDisconnectFuture, future)) {
           _transportDisconnectFuture = null;
         }
@@ -1111,6 +1156,7 @@ class JsonRpcRiftClient {
     }
 
     _intentionalDisconnect = true;
+    final disconnectedEpoch = _connectionEpoch;
     _connectionEpoch++;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -1128,6 +1174,7 @@ class JsonRpcRiftClient {
       peer: peer,
       outController: outController,
       pendingConnect: pendingConnect,
+      disconnectedEpoch: disconnectedEpoch,
     );
     _disconnectFuture = future;
     unawaited(
@@ -1144,6 +1191,7 @@ class JsonRpcRiftClient {
     required json_rpc.Peer? peer,
     required StreamController<String>? outController,
     required Future<void>? pendingConnect,
+    required int disconnectedEpoch,
   }) async {
     try {
       await peer?.close();
@@ -1166,7 +1214,7 @@ class JsonRpcRiftClient {
         }
       }
     }
-    await _disconnectTransport();
+    await _disconnectTransport(disconnectedEpoch);
   }
 
   Future<void> dispose() => _disposeFuture ??= _dispose();
