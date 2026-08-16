@@ -296,6 +296,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
   void _listenToAttempt(_AndroidDaemonConnection attempt) {
     attempt.errorSub = attempt.errorPort!.listen((message) {
+      if (attempt.isShuttingDown) return;
       final error = message is List && message.length >= 2
           ? StateError(
               'Daemon isolate error: ${message[0]}\n${message[1]}',
@@ -307,6 +308,8 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       }
     });
     attempt.exitSub = attempt.exitPort!.listen((_) {
+      attempt.markIsolateExited();
+      if (attempt.isShuttingDown) return;
       final error = StateError('Daemon isolate exited');
       attempt.addIncomingError(error);
       if (!attempt.ready.isCompleted) {
@@ -773,6 +776,7 @@ class _AndroidDaemonConnection {
   final int id;
   final Completer<SendPort> ready = Completer<SendPort>();
   final Completer<void> cancelled = Completer<void>();
+  final Completer<void> isolateExited = Completer<void>();
   final Map<Object, Completer<Map<String, dynamic>>> bootstrapRequests =
       HashMap<Object, Completer<Map<String, dynamic>>>();
 
@@ -802,7 +806,8 @@ class _AndroidDaemonConnection {
   Future<void>? _disposeFuture;
 
   bool get isShuttingDown => _isShuttingDown;
-  bool get hasOwnedDaemonIsolate => _killIsolate != null && !_isolateKilled;
+  bool get hasOwnedDaemonIsolate =>
+      _killIsolate != null && !isolateExited.isCompleted;
 
   StreamChannel<String> get channel => StreamChannel<String>(
         incoming!.stream,
@@ -817,6 +822,16 @@ class _AndroidDaemonConnection {
     if (_isShuttingDown) {
       _killOwnedIsolate();
     }
+  }
+
+  void markIsolateExited() {
+    if (isolateExited.isCompleted) return;
+    isolateExited.complete();
+    debugPrint(
+      _isolateKilled
+          ? '[Android Daemon Transport] daemon isolate killed attempt=$id'
+          : '[Android Daemon Transport] daemon isolate exited attempt=$id',
+    );
   }
 
   void beginShutdown() {
@@ -843,7 +858,7 @@ class _AndroidDaemonConnection {
       );
     }
     debugPrint(
-      '[Android Daemon Transport] daemon isolate killed attempt=$id',
+      '[Android Daemon Transport] daemon isolate kill requested attempt=$id',
     );
   }
 
@@ -899,6 +914,11 @@ class _AndroidDaemonConnection {
         );
       }
     }
+
+    if (_killIsolate != null && !isolateExited.isCompleted) {
+      await clean('daemon-isolate-exit', () => isolateExited.future);
+    }
+    _killIsolate = null;
 
     await clean('discovery-added-subscription', () async {
       await discoveryAddedSub?.cancel();

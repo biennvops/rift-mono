@@ -32,6 +32,46 @@ void main() {
       await harness.dispose();
     });
 
+    test('retry waits for child exit acknowledgment after kill', () async {
+      final harness = _TransportHarness(
+        [_StartupOutcome.pending, _StartupOutcome.ready],
+        acknowledgeKills: false,
+      );
+      final transport = harness.createTransport(
+        readyTimeout: Duration.zero,
+      );
+
+      final firstConnect = transport.connect();
+      final firstExpectation = expectLater(
+        firstConnect,
+        throwsA(isA<TimeoutException>()),
+      );
+      await pumpEventQueue();
+      expect(harness.spawnCount, 1);
+      expect(harness.killCount, 1);
+      expect(transport.hasOwnedDaemonIsolate, isTrue);
+
+      final joinedConnect = transport.connect();
+      final joinedExpectation = expectLater(
+        joinedConnect,
+        throwsA(isA<TimeoutException>()),
+      );
+      await pumpEventQueue();
+      expect(harness.spawnCount, 1);
+
+      harness.children.first.acknowledgeExit();
+      await firstExpectation;
+      await joinedExpectation;
+
+      await transport.connect();
+      expect(harness.spawnCount, 2);
+      expect(harness.liveChildren, 1);
+      final disconnect = transport.disconnect();
+      harness.children.last.acknowledgeExit();
+      await disconnect;
+      await harness.dispose();
+    });
+
     test('isolate error before ready rolls back the child', () async {
       final harness = _TransportHarness([_StartupOutcome.error]);
       final transport = harness.createTransport();
@@ -241,6 +281,7 @@ class _TransportHarness {
     _FakeDiscoveryBridge? discoveryBridge,
     this.includeDiscoveryMetadata = false,
     this.respondToTrustedPeers = false,
+    this.acknowledgeKills = true,
   })  : _outcomes = List<_StartupOutcome>.of(outcomes),
         discoveryBridge = discoveryBridge ?? _FakeDiscoveryBridge();
 
@@ -248,6 +289,7 @@ class _TransportHarness {
   final _FakeDiscoveryBridge discoveryBridge;
   final bool includeDiscoveryMetadata;
   final bool respondToTrustedPeers;
+  final bool acknowledgeKills;
   final List<_FakeChild> children = <_FakeChild>[];
   final List<ReceivePort> _tlsPorts = <ReceivePort>[];
   final StreamController<Map<String, dynamic>> rpcRequests =
@@ -312,6 +354,7 @@ class _TransportHarness {
       exitPort: onExit,
       rpcReceive: rpcReceive,
       includeDiscoveryMetadata: includeDiscoveryMetadata,
+      acknowledgeKill: acknowledgeKills,
       onKill: () {
         killCount += 1;
         liveChildren -= 1;
@@ -367,6 +410,7 @@ class _FakeChild {
     required this.exitPort,
     required this.rpcReceive,
     required this.includeDiscoveryMetadata,
+    required this.acknowledgeKill,
     required this.onKill,
   });
 
@@ -375,6 +419,7 @@ class _FakeChild {
   final SendPort exitPort;
   final ReceivePort rpcReceive;
   final bool includeDiscoveryMetadata;
+  final bool acknowledgeKill;
   final void Function() onKill;
   bool _alive = true;
 
@@ -405,6 +450,13 @@ class _FakeChild {
     if (!_alive) return;
     _alive = false;
     onKill();
+    if (acknowledgeKill) {
+      scheduleMicrotask(acknowledgeExit);
+    }
+  }
+
+  void acknowledgeExit() {
+    exitPort.send(null);
   }
 
   void close() {
