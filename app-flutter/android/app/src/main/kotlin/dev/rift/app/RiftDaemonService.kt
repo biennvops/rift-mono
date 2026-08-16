@@ -115,8 +115,17 @@ class RiftDaemonService : Service() {
     }
 
     override fun onDestroy() {
+        val restartAfterDestroy =
+            restartAfterShutdown && runtimeFinalizer.isFinalized()
         requestRuntimeShutdown(stopServiceAfterward = false)
         super.onDestroy()
+        if (restartAfterDestroy) {
+            restartAfterShutdown = false
+            Log.i(logTag, "Restarting daemon after service destruction")
+            mainHandler.post {
+                start(applicationContext)
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
