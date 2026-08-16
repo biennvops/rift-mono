@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
 
 import '../device_status/device_status_publisher.dart';
 import '../media_playback/android_remote_media_playback_coordinator.dart';
@@ -13,6 +14,7 @@ import '../mirrored_notification_reconciliation.dart';
 import '../platform/android_shell.dart';
 import '../platform/notification_route.dart';
 import 'android_daemon_isolate_transport.dart';
+import 'android_native_event_queue.dart';
 import 'json_rpc_client.dart';
 
 const _backgroundBridgeChannel =
@@ -36,9 +38,6 @@ Future<void> runAndroidBackgroundMain() async {
 
   final transport = AndroidDaemonIsolateTransport();
   final client = JsonRpcRiftClient(transport);
-  final pendingNativeEvents = <Map<String, dynamic>>[];
-  var flushingNativeEvents = false;
-  var notificationPolicyReady = false;
   final mirroredNotificationRegistry =
       await MirroredNotificationRegistry.load();
   Future<String?>? localDeviceIdFuture;
@@ -102,59 +101,50 @@ Future<void> runAndroidBackgroundMain() async {
     );
   }
 
-  Future<void> flushNativeEvents() async {
-    if (flushingNativeEvents || !client.isConnected) {
-      return;
-    }
-    flushingNativeEvents = true;
+  Future<AndroidNativeEventDispatchResult> dispatchNativeEvent(
+    AndroidNativeEvent event,
+  ) async {
     try {
-      while (pendingNativeEvents.isNotEmpty && client.isConnected) {
-        final event = pendingNativeEvents.first;
-        final eventType = event['eventType']?.toString();
-        if (eventType == null || eventType.isEmpty) {
-          pendingNativeEvents.removeAt(0);
-          continue;
-        }
-        final isNotificationPostOrUpdate =
-            (eventType == 'posted' || eventType == 'updated') &&
-                event.containsKey('notificationId');
-        if (isNotificationPostOrUpdate && !notificationPolicyReady) {
-          return;
-        }
-        try {
-          if (eventType == 'mediaPlaybackAction') {
-            await client.performMediaPlaybackAction(
-              sourceDeviceId: event['sourceDeviceId']?.toString() ?? '',
-              playbackId: event['playbackId']?.toString() ?? '',
-              action: event['action']?.toString() ?? '',
-              positionMs: (event['positionMs'] as num?)?.toInt(),
-            );
-          } else if (eventType == 'posted' ||
-              eventType == 'updated' ||
-              eventType == 'removed') {
-            final payload = Map<String, Object?>.from(event)
-              ..remove('eventType');
-            if (event.containsKey('notificationId')) {
-              await client.notifyLocalNotificationEvent(
-                eventType: eventType,
-                payload: payload,
-              );
-            } else if (event.containsKey('playbackId')) {
-              await client.notifyLocalMediaPlaybackEvent(
-                eventType: eventType,
-                payload: payload,
-              );
-            }
-          }
-          pendingNativeEvents.removeAt(0);
-        } catch (_) {
-          return;
-        }
+      final payload = Map<String, Object?>.from(event.payload)
+        ..remove('eventType');
+      switch (event.kind) {
+        case AndroidNativeEventKind.notificationState:
+          await client.notifyLocalNotificationEvent(
+            eventType: event.eventType,
+            payload: payload,
+          );
+          break;
+        case AndroidNativeEventKind.mediaPlaybackState:
+          await client.notifyLocalMediaPlaybackEvent(
+            eventType: event.eventType,
+            payload: payload,
+          );
+          break;
+        case AndroidNativeEventKind.mediaPlaybackAction:
+          await client.performMediaPlaybackAction(
+            sourceDeviceId: event.payload['sourceDeviceId'] as String,
+            playbackId: event.payload['playbackId'] as String,
+            action: event.payload['action'] as String,
+            positionMs: event.payload['positionMs'] as int?,
+          );
+          break;
       }
-    } finally {
-      flushingNativeEvents = false;
+      return AndroidNativeEventDispatchResult.delivered;
+    } on json_rpc.RpcException {
+      return AndroidNativeEventDispatchResult.drop;
+    } on StateError {
+      return AndroidNativeEventDispatchResult.retryLater;
+    } catch (_) {
+      return client.isConnected
+          ? AndroidNativeEventDispatchResult.drop
+          : AndroidNativeEventDispatchResult.retryLater;
     }
   }
+
+  final nativeEventQueue = AndroidNativeEventQueue(
+    dispatch: dispatchNativeEvent,
+    logger: (message) => debugPrint('[Android Native Event Queue] $message'),
+  );
 
   Future<void> handleIncomingNotificationAction(
     Map<String, dynamic> request,
@@ -282,8 +272,8 @@ Future<void> runAndroidBackgroundMain() async {
       case 'nativeEvent':
         final event = call.arguments;
         if (event is Map) {
-          pendingNativeEvents.add(Map<String, dynamic>.from(event));
-          await flushNativeEvents();
+          nativeEventQueue.enqueue(Map<String, dynamic>.from(event));
+          await nativeEventQueue.flush();
         }
         return true;
       default:
@@ -292,16 +282,21 @@ Future<void> runAndroidBackgroundMain() async {
   });
 
   await client.connect();
+  nativeEventQueue.onConnected();
   Future<void> restorePolicyAndFlushNativeEvents() async {
-    notificationPolicyReady = false;
+    nativeEventQueue.setNotificationPolicyReady(false);
+    await nativeEventQueue.flush();
     final restored = await restoreSavedNotificationSyncPolicyBeforeFlush(
       client,
       () async {
-        notificationPolicyReady = true;
-        await flushNativeEvents();
+        nativeEventQueue.setNotificationPolicyReady(true);
+        await nativeEventQueue.flush();
       },
     );
-    notificationPolicyReady = restored;
+    nativeEventQueue.setNotificationPolicyReady(restored);
+    if (!restored) {
+      await nativeEventQueue.flush();
+    }
   }
 
   await restorePolicyAndFlushNativeEvents();
@@ -314,6 +309,7 @@ Future<void> runAndroidBackgroundMain() async {
 
   client.onConnectionChanged.listen((isConnected) {
     if (isConnected) {
+      nativeEventQueue.onConnected();
       unawaited(restorePolicyAndFlushNativeEvents());
       unawaited(
         enqueueMirroredNotificationLifecycle(
@@ -321,7 +317,7 @@ Future<void> runAndroidBackgroundMain() async {
         ),
       );
     } else {
-      notificationPolicyReady = false;
+      nativeEventQueue.onConnectionLost();
     }
   });
 
