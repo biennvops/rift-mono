@@ -813,6 +813,42 @@ void main() {
       expect(service.startDiscovery, throwsStateError);
     });
 
+    test(
+      'dispose retries retained teardown after first failure and completes disposal',
+      () async {
+        final dependencies = _FakeDiscoveryDependencies();
+        final service = dependencies.createService();
+        await service.startAdvertising();
+        final registration = dependencies.registrations.single;
+        final discoveredDone = service.onDeviceDiscovered.drain<void>();
+        final lostDone = service.onDeviceLost.drain<void>();
+        final failure = StateError('simulated unregister failure');
+        dependencies.unregisterSteps.add((_) => Future<void>.error(failure));
+
+        final firstDispose = service.dispose();
+        final concurrentDispose = service.dispose();
+
+        expect(identical(firstDispose, concurrentDispose), isTrue);
+        await expectLater(firstDispose, throwsA(same(failure)));
+        expect(dependencies.unregisterCalls, 1);
+        expect(dependencies.unregistered, isEmpty);
+
+        final retryDispose = service.dispose();
+
+        expect(identical(firstDispose, retryDispose), isFalse);
+        await retryDispose;
+        await Future.wait([discoveredDone, lostDone]);
+        expect(dependencies.unregisterCalls, 2);
+        expect(dependencies.unregistered, [registration]);
+
+        final completedDispose = service.dispose();
+
+        expect(identical(retryDispose, completedDispose), isTrue);
+        await completedDispose;
+        expect(dependencies.unregisterCalls, 2);
+      },
+    );
+
     test('dispose is idempotent', () async {
       final dependencies = _FakeDiscoveryDependencies();
       final service = dependencies.createService();

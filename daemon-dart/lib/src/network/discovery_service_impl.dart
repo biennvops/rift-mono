@@ -778,7 +778,23 @@ class DiscoveryServiceImpl implements DiscoveryService {
   }
 
   @override
-  Future<void> dispose() => _disposeFuture ??= _dispose();
+  Future<void> dispose() {
+    final active = _disposeFuture;
+    if (active != null) return active;
+
+    late final Future<void> disposeFuture;
+    disposeFuture = _dispose().catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      if (identical(_disposeFuture, disposeFuture)) {
+        _disposeFuture = null;
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    });
+    _disposeFuture = disposeFuture;
+    return disposeFuture;
+  }
 
   Future<void> _dispose() async {
     _disposed = true;
