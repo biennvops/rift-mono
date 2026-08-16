@@ -470,7 +470,8 @@ class NamedPipeWorkerSession {
       return;
     }
     lastOpenError = result.errorCode;
-    final retryable = result.errorCode == ERROR_FILE_NOT_FOUND ||
+    final retryable = result.errorCode == ERROR_SUCCESS ||
+        result.errorCode == ERROR_FILE_NOT_FOUND ||
         result.errorCode == ERROR_PIPE_BUSY;
     if (retryable && openStopwatch.elapsed < openTimeout) {
       openTimer = Timer(openRetryInterval, _tryOpen);
