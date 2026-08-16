@@ -4,6 +4,7 @@ class NearbyPeerFocus extends StatelessWidget {
   const NearbyPeerFocus({
     super.key,
     required this.deviceId,
+    this.identityLabel = 'Device ID',
     required this.displayName,
     required this.platform,
     required this.endpoint,
@@ -12,6 +13,7 @@ class NearbyPeerFocus extends StatelessWidget {
   });
 
   final String deviceId;
+  final String identityLabel;
   final String displayName;
   final String platform;
   final String? endpoint;
@@ -107,7 +109,7 @@ class NearbyPeerFocus extends StatelessWidget {
                     ],
                     const SizedBox(height: 12),
                     Text(
-                      'Device ID',
+                      identityLabel,
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: colors.onSurfaceVariant,
                         fontWeight: FontWeight.w600,

@@ -780,9 +780,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           }
           if (_desktopPairingTarget == null &&
               _selectedNearbyDeviceId != null &&
-              !discoveredPeers.any((peer) =>
-                  peer is Map &&
-                  peer['deviceId']?.toString() == _selectedNearbyDeviceId)) {
+              !discoveredPeers.any(
+                (peer) => _peerPresentationId(peer) == _selectedNearbyDeviceId,
+              )) {
             _selectedNearbyDeviceId = null;
           }
         });
@@ -821,6 +821,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     return localDeviceId != null &&
         localDeviceId.isNotEmpty &&
         deviceId == localDeviceId;
+  }
+
+  String? _peerPresentationId(Object? peer) {
+    if (peer is! Map) return null;
+    for (final key in const ['deviceId', 'instanceId']) {
+      final value = peer[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
   }
 
   List<dynamic> _enrichTrustedPeersFromDiscovery({
@@ -880,11 +889,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     };
 
     return discoveredPeers.where((peer) {
-      if (peer is! Map) return false;
+      if (peer is! Map || _peerPresentationId(peer) == null) return false;
+
       final deviceId = peer['deviceId']?.toString();
-      if (deviceId == null || deviceId.isEmpty) return false;
-      if (_isSelfDevice(deviceId)) return false;
-      if (trustedDeviceIds.contains(deviceId)) return false;
+      if (deviceId != null && deviceId.isNotEmpty) {
+        if (_isSelfDevice(deviceId)) return false;
+        if (trustedDeviceIds.contains(deviceId)) return false;
+      }
 
       final trustState = peer['trustState']?.toString();
       if (trustState != null && hiddenTrustStates.contains(trustState)) {
@@ -1359,7 +1370,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }
 
   Widget _buildDiscoveredCardHtml(Map<String, dynamic> peer, ThemeData theme) {
-    final String deviceIdStr = peer['deviceId']?.toString() ?? '';
+    final String deviceIdStr = _peerPresentationId(peer) ?? '';
     final String rawDisplayName = peer['displayName']?.toString() ?? '';
     final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
     final String shortId =
@@ -1583,7 +1594,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   ) {
     final target = Map<String, dynamic>.from(peer);
     target['displayName'] = displayName;
-    final targetDeviceId = target['deviceId']?.toString();
+    final targetDeviceId = _peerPresentationId(target);
     final sourceOrigin = _orbitEntryOriginFor(
       targetDeviceId,
       _nearbyOrbitPeers,
@@ -1605,10 +1616,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }
 
   void _returnFromDesktopPairing() {
-    final targetDeviceId = _desktopPairingTarget?['deviceId']?.toString();
+    final target = _desktopPairingTarget;
+    final targetDeviceId = target == null ? null : _peerPresentationId(target);
     final remainsNearby = targetDeviceId != null &&
         _nearbyOrbitPeers.any(
-          (peer) => peer['deviceId']?.toString() == targetDeviceId,
+          (peer) => _peerPresentationId(peer) == targetDeviceId,
         );
     setState(() {
       _desktopPairingTarget = null;
@@ -1683,7 +1695,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   ) {
     if (deviceId == null || deviceId.isEmpty) return null;
     final deviceIds = peers
-        .map((peer) => peer['deviceId']?.toString() ?? '')
+        .map((peer) => _peerPresentationId(peer) ?? '')
         .toList(growable: false)
       ..sort();
     final index = deviceIds.indexOf(deviceId);
@@ -2132,11 +2144,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         .map(Map<String, dynamic>.from)
         .toList(growable: true);
     final handoff = _pairingHandoff;
+    final handoffInstanceId = handoff?.sourcePeer['instanceId']?.toString();
     if (handoff != null &&
         !handoff.animating &&
-        !peers.any(
-          (peer) => peer['deviceId']?.toString() == handoff.deviceId,
-        )) {
+        !peers.any((peer) {
+          return peer['deviceId']?.toString() == handoff.deviceId ||
+              (handoffInstanceId != null &&
+                  peer['instanceId']?.toString() == handoffInstanceId);
+        })) {
       peers.add(Map<String, dynamic>.from(handoff.sourcePeer));
     }
     return peers;
@@ -2145,7 +2160,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   String _displayNameFor(Map<String, dynamic> peer) {
     final displayName = peer['displayName']?.toString().trim() ?? '';
     if (displayName.isNotEmpty) return displayName;
-    final deviceId = peer['deviceId']?.toString() ?? '';
+    final deviceId = _peerPresentationId(peer) ?? '';
     if (deviceId.isEmpty) return 'Unknown Device';
     return deviceId.length > 18 ? '${deviceId.substring(0, 18)}…' : deviceId;
   }
@@ -2155,7 +2170,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     bool includeMedia = false,
     OrbitPeerStatusKind? statusKind,
   }) {
-    final deviceId = peer['deviceId']?.toString() ?? '';
+    final deviceId = _peerPresentationId(peer) ?? '';
     final media = includeMedia ? _mediaPlaybackForDevice(deviceId) : null;
     final resolvedStatusKind = statusKind ??
         (peer['presence']?.toString() == 'online'
@@ -2201,7 +2216,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   ) {
     if (deviceId == null) return null;
     for (final peer in peers) {
-      if (peer['deviceId']?.toString() == deviceId) return peer;
+      if (_peerPresentationId(peer) == deviceId) return peer;
     }
     return null;
   }
@@ -2425,7 +2440,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                       child: Focus(
                         autofocus: true,
                         child: NearbyPeerFocus(
-                          deviceId: selectedPeer['deviceId']?.toString() ?? '',
+                          deviceId: _peerPresentationId(selectedPeer) ?? '',
+                          identityLabel:
+                              selectedPeer['deviceId']?.toString().isNotEmpty ==
+                                      true
+                                  ? 'Device ID'
+                                  : 'Discovery ID',
                           displayName: _displayNameFor(selectedPeer),
                           platform:
                               selectedPeer['platform']?.toString() ?? 'unknown',

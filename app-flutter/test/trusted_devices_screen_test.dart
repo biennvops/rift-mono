@@ -681,6 +681,63 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('desktop Nearby supports privacy-preserving discovery handles',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    const instanceId = 'private-peer-instance';
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = const []
+      ..discoveredPeers = [
+        {
+          'instanceId': instanceId,
+          'displayName': 'Private Peer',
+          'platform': 'android',
+          'address': '192.168.1.81',
+          'port': 12001,
+          'trustState': 'discovered',
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(1200, 800)),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+
+    final peer = find.byKey(
+      const ValueKey('nearby-orbit-peer-$instanceId'),
+    );
+    expect(peer, findsOneWidget);
+
+    await tester.tap(peer);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Discovery ID'), findsOneWidget);
+    expect(find.text(instanceId), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('nearby-pair-action')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.manualPairAddress, '192.168.1.81');
+    expect(client.manualPairPort, 12001);
+    expect(
+      find.byKey(
+        const ValueKey('nearby-pairing-focus-192.168.1.81:12001'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('desktop This Device opens and closes in-scene focus',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1200, 800);
