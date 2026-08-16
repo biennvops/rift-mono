@@ -35,6 +35,7 @@ class FileTransferService {
   late final StreamSubscription<SessionContext> _trustedSessionReadySub;
   final Set<Future<void>> _messageWork = {};
   final Map<String, Future<void>> _resumeWorkByPeer = {};
+  final Set<String> _pendingResumePeers = {};
   bool _disposed = false;
   Future<void>? _disposeFuture;
 
@@ -74,6 +75,7 @@ class FileTransferService {
 
   Future<void> _dispose() async {
     _disposed = true;
+    _pendingResumePeers.clear();
     await Future.wait([_messageSub.cancel(), _trustedSessionReadySub.cancel()]);
     await Future.wait([..._messageWork, ..._resumeWorkByPeer.values]);
     await _fileOfferController.close();
@@ -98,8 +100,9 @@ class FileTransferService {
 
     final peerDeviceId = context.peerDeviceId;
     if (_resumeWorkByPeer.containsKey(peerDeviceId)) {
+      _pendingResumePeers.add(peerDeviceId);
       RiftLog.debug(
-        '[FileTransfer] Resume reconciliation already active peer=$peerDeviceId',
+        '[FileTransfer] Resume reconciliation queued peer=$peerDeviceId',
       );
       return;
     }
@@ -114,18 +117,21 @@ class FileTransferService {
   }
 
   Future<void> _runResumeRequestsForPeer(String peerDeviceId) async {
-    RiftLog.debug(
-      '[FileTransfer] Resume reconciliation started peer=$peerDeviceId',
-    );
-    try {
-      await _sendResumeRequestsForPeer(peerDeviceId);
-    } catch (error, stackTrace) {
-      RiftLog.error(
-        '[FileTransfer] Resume reconciliation failed peer=$peerDeviceId',
-        error: error,
-        stackTrace: stackTrace,
+    do {
+      _pendingResumePeers.remove(peerDeviceId);
+      RiftLog.debug(
+        '[FileTransfer] Resume reconciliation started peer=$peerDeviceId',
       );
-    }
+      try {
+        await _sendResumeRequestsForPeer(peerDeviceId);
+      } catch (error, stackTrace) {
+        RiftLog.error(
+          '[FileTransfer] Resume reconciliation failed peer=$peerDeviceId',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    } while (!_disposed && _pendingResumePeers.contains(peerDeviceId));
   }
 
   @visibleForTesting

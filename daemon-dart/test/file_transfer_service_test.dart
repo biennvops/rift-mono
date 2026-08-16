@@ -1742,7 +1742,7 @@ void main() {
       await Future.wait([peerAWork, peerBWork]);
     });
 
-    test('repeated ready events do not create a resume backlog', () async {
+    test('repeated ready events coalesce into one resume rerun', () async {
       final controlledTransport = await useControlledResumeTransport();
       final context = await _addResumableIncomingTransfer(
         service: service,
@@ -1765,7 +1765,33 @@ void main() {
       expect(controlledTransport.resumeCallsByPeer['rift-peer'], 1);
       controlledTransport.releaseResume('rift-peer');
       await resumeWork;
-      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 1);
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 2);
+      expect(controlledTransport.maxActiveResumeCallsByPeer['rift-peer'], 1);
+    });
+
+    test('ready event during a failed resume send triggers a rerun', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '36363636-3636-4636-8636-363636363636',
+        messageId: '37373737-3737-4737-8737-373737373737',
+      );
+      controlledTransport.blockResume('rift-peer');
+      controlledTransport.failNextResume('rift-peer');
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 1);
+      final resumeWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+      emitTrustedSessionReady(context);
+      controlledTransport.releaseResume('rift-peer');
+      await resumeWork;
+
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 2);
+      expect(controlledTransport.maxActiveResumeCallsByPeer['rift-peer'], 1);
     });
 
     test('resume failure is observed and allows a later retry', () async {
