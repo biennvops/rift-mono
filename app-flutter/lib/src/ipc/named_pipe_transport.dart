@@ -90,7 +90,7 @@ class NamedPipeTransport implements IpcTransport {
     }
   }
 
-  void _onTerminal(_PipeConnection connection, Object error) {
+  void _onTerminal(_PipeConnection connection, Object? error) {
     if (!identical(_active, connection) && !identical(_pending, connection)) {
       _log.fine(
           'Windows pipe stale event ignored generation=${connection.generation}');
@@ -203,7 +203,7 @@ class _PipeConnection {
   final NamedPipeWorkerSpawner spawner;
   final Duration shutdownTimeout;
   final Logger log;
-  final void Function(_PipeConnection, Object) onTerminal;
+  final void Function(_PipeConnection, Object?) onTerminal;
   final incoming = StreamController<List<int>>();
   final outgoing = StreamController<List<int>>();
   final connected = Completer<void>();
@@ -219,6 +219,7 @@ class _PipeConnection {
   bool controlReady = false;
   bool committed = false;
   bool expectedStop = false;
+  bool closeRequested = false;
   bool isTerminal = false;
   bool closed = false;
 
@@ -248,14 +249,16 @@ class _PipeConnection {
     });
     exitSubscription = process.exits.listen((_) {
       if (!exited.isCompleted) exited.complete();
-      if (!expectedStop && !isTerminal) {
+      if (expectedStop) {
+        _completeGracefulStop();
+      } else if (!isTerminal) {
         _fail(StateError(
             'Pipe worker exited unexpectedly generation=$generation'));
       }
     });
     outgoingSubscription = outgoing.stream.listen(
       (bytes) => process.send(Uint8List.fromList(bytes)),
-      onDone: () => process.send(const {'type': _close}),
+      onDone: () => _requestStop(process),
     );
     await connected.future;
     committed = true;
@@ -293,10 +296,26 @@ class _PipeConnection {
           'generation=$generation error=${message['errorCode']}',
         ));
       case _stopped:
-        if (!stopped.isCompleted) stopped.complete();
+        _completeGracefulStop();
       default:
         _fail(StateError('Unknown pipe worker message: ${message['type']}'));
     }
+  }
+
+  void _requestStop(NamedPipeWorkerProcess process) {
+    expectedStop = true;
+    if (closeRequested) return;
+    closeRequested = true;
+    process.send(const {'type': _close});
+  }
+
+  void _completeGracefulStop() {
+    expectedStop = true;
+    if (!stopped.isCompleted) stopped.complete();
+    if (!committed || isTerminal) return;
+    isTerminal = true;
+    if (!incoming.isClosed) unawaited(incoming.close());
+    onTerminal(this, null);
   }
 
   void _fail(Object error) {
@@ -326,7 +345,7 @@ class _PipeConnection {
     if (process != null) {
       if (!workerIsStopping) {
         log.fine('Windows pipe worker stopping generation=$generation');
-        process.send(const {'type': _close});
+        _requestStop(process);
         try {
           await stopped.future.timeout(shutdownTimeout);
         } on TimeoutException {

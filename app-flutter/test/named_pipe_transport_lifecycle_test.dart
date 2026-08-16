@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rift/src/ipc/named_pipe_transport.dart';
+import 'package:stream_channel/stream_channel.dart';
 
 void main() {
   group('NamedPipeTransport lifecycle', () {
@@ -82,6 +83,31 @@ void main() {
       expect(await error.future, isA<StateError>());
       await pumpEventQueue();
       expect(spawner.last.closed, isTrue);
+    });
+
+    test('channel sink closure stops worker without a transport error',
+        () async {
+      final spawner = _FakeSpawner();
+      final transport = _transport(spawner);
+      final channel = await _connect(transport, spawner);
+      final errors = <Object>[];
+      final streamDone = Completer<void>();
+      channel.stream.listen(
+        (_) {},
+        onError: errors.add,
+        onDone: streamDone.complete,
+      );
+      spawner.last.stopAndExitOnClose = true;
+
+      await channel.sink.close();
+      await streamDone.future;
+      await pumpEventQueue();
+
+      expect(errors, isEmpty);
+      expect(spawner.last.closeRequests, 1);
+      expect(spawner.last.killed, isFalse);
+      expect(spawner.last.closed, isTrue);
+      await transport.disconnect();
     });
 
     test('normal disconnect waits for stopped acknowledgement', () async {
@@ -343,14 +369,14 @@ NamedPipeTransport _transport(
       shutdownTimeout: shutdownTimeout,
     );
 
-Future<void> _connect(
+Future<StreamChannel<String>> _connect(
     NamedPipeTransport transport, _FakeSpawner spawner) async {
   final connect = transport.connect();
   await pumpEventQueue();
   spawner.last
     ..controlReady()
     ..connected();
-  await connect;
+  return connect;
 }
 
 Future<void> _disconnectNormally(
@@ -400,6 +426,7 @@ class _FakeProcess implements NamedPipeWorkerProcess {
   final exitController = StreamController<Object?>(sync: true);
   final controlToken = ReceivePort();
   int closeRequests = 0;
+  bool stopAndExitOnClose = false;
   bool killed = false;
   bool closed = false;
 
@@ -442,7 +469,12 @@ class _FakeProcess implements NamedPipeWorkerProcess {
 
   @override
   void send(Object message) {
-    if (message is Map && message['type'] == 'close') closeRequests++;
+    if (message is! Map || message['type'] != 'close') return;
+    closeRequests++;
+    if (stopAndExitOnClose) {
+      stopped();
+      exit();
+    }
   }
 
   @override
