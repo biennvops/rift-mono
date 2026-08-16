@@ -115,7 +115,12 @@ class EvidencePacket:
 
     @property
     def estimated_input_tokens(self) -> int:
-        return estimate_tokens(json.dumps(self.model_payload(), ensure_ascii=False, sort_keys=True))
+        budgeted = self.budget.get("estimated_input_tokens")
+        if isinstance(budgeted, int) and budgeted > 0:
+            return budgeted
+        from .prompts import PromptRenderer
+
+        return PromptRenderer().render(self.task, self).estimated_input_tokens
 
     @property
     def packet_hash(self) -> str:

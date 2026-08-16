@@ -13,8 +13,9 @@ from ..repository.model import RepositoryEvidence, RepositorySnapshot
 from ..results import Finding
 from ..spec import CapstoneSpec
 from ..trace_model import TraceEntity, TraceGraph
-from .model import EvidencePacket, SemanticEvidence, SemanticReviewTask, estimate_tokens, stable_id
+from .model import EvidencePacket, SemanticEvidence, SemanticReviewTask, stable_id
 from .planner import finding_reference
+from .prompts import PromptRenderer
 
 
 _DEFAULT_SECRET_PATTERNS = (
@@ -42,12 +43,14 @@ class EvidencePacketBuilder:
         *,
         max_input_tokens: int = 12_000,
         excluded_paths: Iterable[str] = (),
+        prompt_renderer: PromptRenderer | None = None,
     ) -> None:
         if max_input_tokens < _MIN_PACKET_TOKENS:
             raise ValueError(f"max_input_tokens must be at least {_MIN_PACKET_TOKENS}")
         self.spec = spec
         self.max_input_tokens = max_input_tokens
         self.excluded_paths = tuple(str(value) for value in excluded_paths if str(value))
+        self.prompt_renderer = prompt_renderer or PromptRenderer()
 
     def build(
         self,
@@ -120,7 +123,7 @@ class EvidencePacketBuilder:
             task.task_id,
             [(item.evidence_id, item.content, item.truncated) for item in packet.all_evidence],
         )
-        packet.budget["estimated_input_tokens"] = packet.estimated_input_tokens
+        packet.budget["estimated_input_tokens"] = self._estimated_input_tokens(task, packet)
         packet.budget["evidence_count"] = len(packet.all_evidence)
         return packet
 
@@ -590,19 +593,21 @@ class EvidencePacketBuilder:
         excluded: list[dict[str, Any]],
     ) -> tuple[dict[str, list[SemanticEvidence]], list[dict[str, Any]]]:
         result = {key: [] for key in categories}
-        packet_shell = {
-            "task": task.to_dict(),
-            "contract_requirements": [],
-            "document_evidence": [],
-            "cross_document_evidence": [],
-            "repository_evidence": [],
-            "deterministic_findings": [],
-            "provenance": provenance,
-            "excluded_evidence": excluded,
-        }
-        remaining = self.max_input_tokens - estimate_tokens(
-            json.dumps(packet_shell, ensure_ascii=False, sort_keys=True, default=str)
+        packet = EvidencePacket(
+            "budget-check",
+            task,
+            provenance=provenance,
+            excluded_evidence=excluded,
         )
+        fixed_prompt_tokens = self._estimated_input_tokens(task, packet)
+        if fixed_prompt_tokens > self.max_input_tokens:
+            raise ValueError(
+                f"semantic task {task.task_id} requires {fixed_prompt_tokens} input tokens "
+                f"before evidence, exceeding the {self.max_input_tokens}-token limit"
+            )
+        for category, values in result.items():
+            setattr(packet, category, values)
+
         truncated: list[dict[str, Any]] = []
         ordered: list[tuple[int, int, str, SemanticEvidence]] = []
         sequence = 0
@@ -616,54 +621,23 @@ class EvidencePacketBuilder:
                 sequence += 1
         ordered.sort(key=lambda value: (value[0], value[1]))
         for _priority, _sequence, category, item in ordered:
-            required = item.priority <= 4
-            tokens = item.estimated_tokens
-            if tokens <= remaining:
-                result[category].append(item)
-                remaining -= tokens
+            result[category].append(item)
+            if self._estimated_input_tokens(task, packet) <= self.max_input_tokens:
                 continue
-            empty_tokens = item.with_content("", truncated=True).estimated_tokens
-            content_budget = max(0, remaining - empty_tokens)
-            maximum_characters = content_budget * 4
-            if maximum_characters >= 80:
-                content = item.content[:maximum_characters]
-                if len(content) < len(item.content):
-                    content = content.rstrip() + "…"
-                bounded = item.with_content(content, truncated=True)
+            result[category].pop()
+
+            bounded = self._largest_fitting_item(task, packet, category, item)
+            if bounded is not None and len(bounded.content) >= 80:
                 result[category].append(bounded)
-                remaining = max(0, remaining - bounded.estimated_tokens)
                 truncated.append(
                     {
                         "evidence_id": item.evidence_id,
                         "original_characters": len(item.content),
-                        "included_characters": len(content),
+                        "included_characters": len(bounded.content),
                         "included": True,
                     }
                 )
-            else:
-                truncated.append(
-                    {
-                        "evidence_id": item.evidence_id,
-                        "original_characters": len(item.content),
-                        "included_characters": 0,
-                        "included": False,
-                        "required": required,
-                    }
-                )
-
-        packet = EvidencePacket("budget-check", task, provenance=provenance, excluded_evidence=excluded)
-        for category, values in result.items():
-            setattr(packet, category, values)
-        while packet.estimated_input_tokens > self.max_input_tokens:
-            removable = [
-                (item.priority, category, index, item)
-                for category, values in result.items()
-                for index, item in enumerate(values)
-            ]
-            if not removable:
-                break
-            _priority, category, index, item = max(removable, key=lambda value: (value[0], value[2]))
-            del result[category][index]
+                continue
             truncated.append(
                 {
                     "evidence_id": item.evidence_id,
@@ -673,9 +647,39 @@ class EvidencePacketBuilder:
                     "required": item.priority <= 4,
                 }
             )
-            for key, values in result.items():
-                setattr(packet, key, values)
         return result, truncated
+
+    def _largest_fitting_item(
+        self,
+        task: SemanticReviewTask,
+        packet: EvidencePacket,
+        category: str,
+        item: SemanticEvidence,
+    ) -> SemanticEvidence | None:
+        low = 0
+        high = max(0, len(item.content) - 1)
+        best: SemanticEvidence | None = None
+        values = getattr(packet, category)
+        while low <= high:
+            length = (low + high) // 2
+            content = item.content[:length].rstrip() + "…"
+            candidate = item.with_content(content, truncated=True)
+            values.append(candidate)
+            fits = self._estimated_input_tokens(task, packet) <= self.max_input_tokens
+            values.pop()
+            if fits:
+                best = candidate
+                low = length + 1
+            else:
+                high = length - 1
+        return best
+
+    def _estimated_input_tokens(
+        self,
+        task: SemanticReviewTask,
+        packet: EvidencePacket,
+    ) -> int:
+        return self.prompt_renderer.render(task, packet).estimated_input_tokens
 
     def _path_allowed(self, value: str) -> bool:
         path = str(value).replace("\\", "/")

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import re
 
-from .model import EvidencePacket, SemanticReviewTask
+from .model import EvidencePacket, SemanticReviewTask, estimate_tokens
 
 
 _PROMPT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*\.v\d+$")
@@ -20,6 +20,10 @@ class RenderedPrompt:
     system: str
     user: str
     prompt_hash: str
+
+    @property
+    def estimated_input_tokens(self) -> int:
+        return estimate_tokens(self.system) + estimate_tokens(self.user)
 
 
 class PromptRenderer:

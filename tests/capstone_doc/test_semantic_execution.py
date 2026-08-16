@@ -20,6 +20,7 @@ from rift_doc.semantic import (
     SemanticPlan,
     SemanticReviewTask,
     SemanticTaskType,
+    estimate_tokens,
     validate_semantic_output,
 )
 from rift_doc.semantic.result_validation import SemanticOutputError
@@ -355,6 +356,44 @@ def test_cost_limit_is_hard_before_provider_call() -> None:
 
     assert provider.calls == []
     assert report.executions[0].execution_status == "COST_LIMIT"
+
+
+def test_input_and_cost_limits_count_the_complete_rendered_prompt() -> None:
+    packet = _packet()
+    prompt = PromptRenderer().render(packet.task, packet)
+    payload_tokens = estimate_tokens(
+        json.dumps(packet.model_payload(), ensure_ascii=False, sort_keys=True)
+    )
+    rendered_tokens = estimate_tokens(prompt.system) + estimate_tokens(prompt.user)
+    assert payload_tokens < rendered_tokens
+
+    input_provider = FakeLLMProvider([])
+    input_report = SemanticAuditRunner(
+        _spec(),
+        options=SemanticAuditOptions(
+            cache_enabled=False,
+            max_input_tokens=(payload_tokens + rendered_tokens) // 2,
+        ),
+    ).run(_plan(packet), input_provider)
+
+    cost_provider = FakeLLMProvider([], retry_attempts=0)
+    cost_provider.config = replace(
+        cost_provider.config,
+        input_cost_per_million=1.0,
+        output_cost_per_million=0.0,
+    )
+    cost_report = SemanticAuditRunner(
+        _spec(),
+        options=SemanticAuditOptions(
+            cache_enabled=False,
+            max_cost=(payload_tokens + rendered_tokens) / 2_000_000,
+        ),
+    ).run(_plan(packet), cost_provider)
+
+    assert input_provider.calls == []
+    assert input_report.executions[0].execution_status == "INPUT_LIMIT"
+    assert cost_provider.calls == []
+    assert cost_report.executions[0].execution_status == "COST_LIMIT"
 
 
 def test_provider_config_enforces_local_policy_and_never_persists_key(monkeypatch: pytest.MonkeyPatch) -> None:

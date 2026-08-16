@@ -6,7 +6,13 @@ from rift_doc.document_set import DocumentArtifact, DocumentSet
 from rift_doc.model import Block, ContentClass, Document, Image, Section, SourceLocation
 from rift_doc.repository import EvidenceKind, RepositoryEvidence, RepositorySnapshot
 from rift_doc.results import Finding, Status
-from rift_doc.semantic import EvidencePacketBuilder, SemanticReviewPlanner, SemanticTaskType
+from rift_doc.semantic import (
+    EvidencePacketBuilder,
+    PromptRenderer,
+    SemanticReviewPlanner,
+    SemanticTaskType,
+    estimate_tokens,
+)
 from rift_doc.spec import CapstoneSpec
 from rift_doc.trace_model import TraceEntity, TraceGraph
 
@@ -273,9 +279,13 @@ def test_packet_budget_is_hard_and_records_truncation() -> None:
     documents = _document_set(long_text=True)
     task = SemanticReviewPlanner(spec).plan(documents, _graph(), [])[0][0]
 
-    packet = EvidencePacketBuilder(spec, max_input_tokens=800).build(task, documents, _graph(), [])
+    packet = EvidencePacketBuilder(spec, max_input_tokens=7_600).build(task, documents, _graph(), [])
+    prompt = PromptRenderer().render(task, packet)
+    rendered_tokens = estimate_tokens(prompt.system) + estimate_tokens(prompt.user)
 
-    assert packet.estimated_input_tokens <= 800
+    assert rendered_tokens <= 7_600
+    assert packet.estimated_input_tokens == rendered_tokens
+    assert packet.budget["estimated_input_tokens"] == rendered_tokens
     assert packet.truncated_evidence
     assert any(item["original_characters"] > item["included_characters"] for item in packet.truncated_evidence)
 

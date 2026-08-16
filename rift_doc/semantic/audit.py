@@ -25,7 +25,7 @@ from .model import (
     SemanticTaskType,
 )
 from .planner import SemanticReviewPlanner
-from .prompts import PromptRenderer
+from .prompts import PromptRenderer, RenderedPrompt
 from .providers import LLMProvider, LLMProviderError
 from .result_validation import SemanticOutputError, validate_semantic_output
 
@@ -128,6 +128,7 @@ class SemanticAuditRunner:
             self.spec,
             max_input_tokens=self.options.max_input_tokens,
             excluded_paths=self.options.excluded_paths,
+            prompt_renderer=self.prompt_renderer,
         )
         packets = [
             builder.build(
@@ -170,8 +171,16 @@ class SemanticAuditRunner:
         semantic_links: list[dict[str, Any]] = []
         estimated_cost = 0.0
         for task, packet in zip(plan.tasks, plan.packets, strict=True):
-            task_cost = _estimated_task_cost(packet, provider)
-            if self.options.max_cost is not None and estimated_cost + task_cost > self.options.max_cost:
+            prompt = self.prompt_renderer.render(task, packet)
+            task_cost = _estimated_task_cost(prompt, provider)
+            if prompt.estimated_input_tokens > self.options.max_input_tokens:
+                execution = self._system_execution(
+                    task,
+                    packet,
+                    "INPUT_LIMIT",
+                    "Semantic review was not called because the rendered prompt exceeds the configured input-token limit.",
+                )
+            elif self.options.max_cost is not None and estimated_cost + task_cost > self.options.max_cost:
                 execution = self._system_execution(
                     task,
                     packet,
@@ -196,7 +205,7 @@ class SemanticAuditRunner:
                     "The task requires visual evidence, but bounded image bytes or provider visual support are unavailable.",
                 )
             else:
-                execution = self._execute_provider(task, packet, provider)
+                execution = self._execute_provider(task, packet, provider, prompt=prompt)
                 estimated_cost += task_cost
             executions.append(execution)
             finding = _semantic_finding(execution)
@@ -231,8 +240,10 @@ class SemanticAuditRunner:
         task: SemanticReviewTask,
         packet: EvidencePacket,
         provider: LLMProvider,
+        *,
+        prompt: RenderedPrompt | None = None,
     ) -> SemanticTaskExecution:
-        prompt = self.prompt_renderer.render(task, packet)
+        prompt = prompt or self.prompt_renderer.render(task, packet)
         timestamp = datetime.now(timezone.utc).isoformat()
         repository_snapshot = packet.provenance.get("repository_snapshot") or {}
         vcs = repository_snapshot.get("vcs") or {} if isinstance(repository_snapshot, dict) else {}
@@ -451,11 +462,11 @@ def _has_required_evidence_gap(packet: EvidencePacket) -> bool:
     )
 
 
-def _estimated_task_cost(packet: EvidencePacket, provider: LLMProvider) -> float:
+def _estimated_task_cost(prompt: RenderedPrompt, provider: LLMProvider) -> float:
     input_rate = provider.config.input_cost_per_million or 0.0
     output_rate = provider.config.output_cost_per_million or 0.0
     return (
-        packet.estimated_input_tokens * input_rate
+        prompt.estimated_input_tokens * input_rate
         + provider.config.max_output_tokens * output_rate
     ) * (provider.config.retry_attempts + 1) / 1_000_000
 
