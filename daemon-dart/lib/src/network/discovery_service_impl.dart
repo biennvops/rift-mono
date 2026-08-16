@@ -117,6 +117,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
   nsd.Registration? _registration;
   nsd.Discovery? _discovery;
+  final List<nsd.Registration> _registrationsPendingCleanup = [];
+  final List<nsd.Discovery> _discoveriesPendingCleanup = [];
   final _peerStreamController = StreamController<DiscoveredPeer>.broadcast();
   final _peerLostController = StreamController<DiscoveredPeer>.broadcast();
   final DiscoveryPeerTracker _tracker = DiscoveryPeerTracker();
@@ -194,7 +196,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
     if (_advertising) {
       return _advertisingStartFuture ?? Future<void>.value();
     }
-    if (_registration != null && _advertisingStopFuture == null) {
+    if ((_registration != null || _registrationsPendingCleanup.isNotEmpty) &&
+        _advertisingStopFuture == null) {
       throw StateError('Advertising teardown must complete before restarting.');
     }
 
@@ -398,6 +401,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
         if (work != null) _ignoreErrors(work),
     ]);
 
+    await _unregisterPendingRegistrations();
     final registration = _registration;
     if (registration != null) {
       await _unregisterCurrentRegistration(registration);
@@ -416,7 +420,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
     if (_discovering) {
       return _discoveryStartFuture ?? Future<void>.value();
     }
-    if (_discovery != null && _discoveryStopFuture == null) {
+    if ((_discovery != null || _discoveriesPendingCleanup.isNotEmpty) &&
+        _discoveryStopFuture == null) {
       throw StateError('Discovery teardown must complete before restarting.');
     }
 
@@ -765,6 +770,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
         if (work != null) _ignoreErrors(work),
     ]);
 
+    await _stopPendingDiscoveries();
     final discovery = _discovery;
     if (discovery != null) {
       await _stopCurrentDiscovery(discovery);
@@ -928,6 +934,14 @@ class DiscoveryServiceImpl implements DiscoveryService {
     }
   }
 
+  Future<void> _unregisterPendingRegistrations() async {
+    while (_registrationsPendingCleanup.isNotEmpty) {
+      final registration = _registrationsPendingCleanup.first;
+      await _unregisterNsd(registration);
+      _registrationsPendingCleanup.removeAt(0);
+    }
+  }
+
   Future<void> _unregisterCurrentRegistration(
     nsd.Registration registration,
   ) async {
@@ -941,9 +955,19 @@ class DiscoveryServiceImpl implements DiscoveryService {
     try {
       await _unregisterNsd(registration);
     } catch (error) {
+      _registrationsPendingCleanup.add(registration);
       RiftLog.warn(
-        '[Discovery] Failed to unregister stale NSD service: $error',
+        '[Discovery] Failed to unregister stale NSD service; '
+        'retaining for retry: $error',
       );
+    }
+  }
+
+  Future<void> _stopPendingDiscoveries() async {
+    while (_discoveriesPendingCleanup.isNotEmpty) {
+      final discovery = _discoveriesPendingCleanup.first;
+      await _stopNsd(discovery);
+      _discoveriesPendingCleanup.removeAt(0);
     }
   }
 
@@ -958,7 +982,11 @@ class DiscoveryServiceImpl implements DiscoveryService {
     try {
       await _stopNsd(discovery);
     } catch (error) {
-      RiftLog.warn('[Discovery] Failed to stop stale NSD discovery: $error');
+      _discoveriesPendingCleanup.add(discovery);
+      RiftLog.warn(
+        '[Discovery] Failed to stop stale NSD discovery; '
+        'retaining for retry: $error',
+      );
     }
   }
 

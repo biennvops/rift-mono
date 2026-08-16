@@ -1,3 +1,6 @@
+@Tags(['network'])
+library;
+
 import 'dart:async';
 import 'dart:io';
 
@@ -381,6 +384,52 @@ void main() {
       },
     );
 
+    test(
+      'stopAdvertising retains a late registration after cleanup fails',
+      () async {
+        final dependencies = _FakeDiscoveryDependencies();
+        final registerCalled = Completer<void>();
+        final registerRelease = Completer<nsd.Registration>();
+        late nsd.Service registeredService;
+        dependencies.registrationSteps.add((service) {
+          registeredService = service;
+          registerCalled.complete();
+          return registerRelease.future;
+        });
+        final service = dependencies.createService();
+        addTearDown(service.dispose);
+
+        final starting = service.startAdvertising();
+        await registerCalled.future;
+        final staleFailure = StateError('simulated stale unregister failure');
+        final stopFailure = StateError('simulated unregister retry failure');
+        dependencies.unregisterSteps
+          ..add((_) => Future<void>.error(staleFailure))
+          ..add((_) => Future<void>.error(stopFailure));
+        final stopping = service.stopAdvertising();
+        final stopExpectation = expectLater(
+          stopping,
+          throwsA(same(stopFailure)),
+        );
+        final registration = nsd.Registration(
+          'late-registration',
+          registeredService,
+        );
+        registerRelease.complete(registration);
+
+        await Future.wait([starting, stopExpectation]);
+
+        expect(dependencies.unregisterCalls, 2);
+        expect(dependencies.unregistered, isEmpty);
+        expect(service.startAdvertising, throwsStateError);
+
+        await service.stopAdvertising();
+
+        expect(dependencies.unregisterCalls, 3);
+        expect(dependencies.unregistered, [registration]);
+      },
+    );
+
     test('stopAdvertising closes a socket from a stale bind', () async {
       final dependencies = _FakeDiscoveryDependencies();
       final service = dependencies.createService();
@@ -546,6 +595,51 @@ void main() {
       await service.startDiscovery();
       expect(dependencies.discoveryStartCalls, 2);
     });
+
+    test(
+      'stopDiscovery retains a late discovery after cleanup fails',
+      () async {
+        final dependencies = _FakeDiscoveryDependencies();
+        final startCalled = Completer<void>();
+        final startRelease = Completer<nsd.Discovery>();
+        dependencies.discoveryStartSteps.add((_) {
+          startCalled.complete();
+          return startRelease.future;
+        });
+        final service = dependencies.createService();
+        addTearDown(service.dispose);
+
+        final starting = service.startDiscovery();
+        await startCalled.future;
+        final staleFailure = StateError(
+          'simulated stale discovery stop failure',
+        );
+        final stopFailure = StateError(
+          'simulated discovery stop retry failure',
+        );
+        dependencies.discoveryStopSteps
+          ..add((_) => Future<void>.error(staleFailure))
+          ..add((_) => Future<void>.error(stopFailure));
+        final stopping = service.stopDiscovery();
+        final stopExpectation = expectLater(
+          stopping,
+          throwsA(same(stopFailure)),
+        );
+        final discovery = nsd.Discovery('late-discovery');
+        startRelease.complete(discovery);
+
+        await Future.wait([starting, stopExpectation]);
+
+        expect(dependencies.discoveryStopCalls, 2);
+        expect(dependencies.stoppedDiscoveries, isEmpty);
+        expect(service.startDiscovery, throwsStateError);
+
+        await service.stopDiscovery();
+
+        expect(dependencies.discoveryStopCalls, 3);
+        expect(dependencies.stoppedDiscoveries, [discovery]);
+      },
+    );
 
     test('a stale NSD callback cannot read a replacement discovery', () async {
       final dependencies = _FakeDiscoveryDependencies();
