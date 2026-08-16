@@ -46,7 +46,8 @@ class NamedPipeTransport implements IpcTransport {
     if (_active case final active? when !active.isTerminal) {
       return active.channel;
     }
-    if (_connecting case final connecting?) return connecting;
+    final connecting = _connecting;
+    if (_pending != null && connecting != null) return connecting;
 
     final attempt = _PipeConnection(
       generation: ++_generation,
@@ -313,7 +314,7 @@ class _PipeConnection {
   Future<void> shutdown({bool workerIsStopping = false}) {
     if (shutdownFuture case final existing?) return existing;
     expectedStop = true;
-    if (!connected.isCompleted) {
+    if (worker != null && !connected.isCompleted) {
       connected.completeError(
           StateError('Pipe connection generation=$generation was cancelled'));
     }

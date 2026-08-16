@@ -167,6 +167,34 @@ void main() {
       await _disconnectNormally(transport, spawner.last);
     });
 
+    test('reconnect replaces an attempt whose spawn is still pending',
+        () async {
+      final spawner = _DelayedSpawner();
+      final transport = _transport(spawner);
+      final firstConnect = transport.connect();
+      final firstExpectation = expectLater(firstConnect, throwsStateError);
+      await pumpEventQueue();
+      expect(spawner.spawnCount, 1);
+
+      await transport.disconnect();
+      final replacementConnect = transport.connect();
+      await pumpEventQueue();
+      expect(spawner.spawnCount, 2);
+
+      final replacement = spawner.complete(1);
+      replacement
+        ..controlReady()
+        ..connected();
+      await replacementConnect;
+
+      final cancelled = spawner.complete(0);
+      await firstExpectation;
+      expect(cancelled.killed, isTrue);
+      expect(cancelled.closed, isTrue);
+      expect(replacement.closed, isFalse);
+      await _disconnectNormally(transport, replacement);
+    });
+
     test('stale failure cannot kill replacement', () async {
       final spawner = _FakeSpawner();
       final transport = _transport(spawner);
@@ -305,7 +333,7 @@ void main() {
 }
 
 NamedPipeTransport _transport(
-  _FakeSpawner spawner, {
+  NamedPipeWorkerSpawner spawner, {
   Duration connectTimeout = const Duration(seconds: 5),
   Duration shutdownTimeout = const Duration(milliseconds: 100),
 }) =>
@@ -344,6 +372,24 @@ class _FakeSpawner implements NamedPipeWorkerSpawner {
   Future<NamedPipeWorkerProcess> spawn(String pipeName, int generation) async {
     final process = _FakeProcess();
     processes.add(process);
+    return process;
+  }
+}
+
+class _DelayedSpawner implements NamedPipeWorkerSpawner {
+  final requests = <Completer<NamedPipeWorkerProcess>>[];
+  int get spawnCount => requests.length;
+
+  @override
+  Future<NamedPipeWorkerProcess> spawn(String pipeName, int generation) {
+    final request = Completer<NamedPipeWorkerProcess>();
+    requests.add(request);
+    return request.future;
+  }
+
+  _FakeProcess complete(int index) {
+    final process = _FakeProcess();
+    requests[index].complete(process);
     return process;
   }
 }
