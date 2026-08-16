@@ -14,9 +14,11 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     this._client, {
     Duration Function()? monotonicNow,
     Directory? linuxPowerSupplyDirectory,
+    Future<Map<String, Object?>?> Function()? readCurrentStatus,
   })  : _monotonicNow = monotonicNow ?? _createMonotonicClock(),
         _linuxPowerSupplyDirectory =
-            linuxPowerSupplyDirectory ?? Directory('/sys/class/power_supply');
+            linuxPowerSupplyDirectory ?? Directory('/sys/class/power_supply'),
+        _readCurrentStatusOverride = readCurrentStatus;
 
   static const _androidChannel = MethodChannel('rift/android/shell');
   static const _iosChannel = MethodChannel('rift/ios/device_status');
@@ -31,47 +33,79 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
   final JsonRpcRiftClient _client;
   final Duration Function() _monotonicNow;
   final Directory _linuxPowerSupplyDirectory;
+  final Future<Map<String, Object?>?> Function()? _readCurrentStatusOverride;
   StreamSubscription<bool>? _connectionSubscription;
   Timer? _timer;
   Map<String, Object?>? _lastPublished;
   Duration? _lastPublishedElapsed;
-  bool _publishing = false;
+  Future<void>? _activePublication;
+  Future<void>? _disposeFuture;
+  bool _disposed = false;
 
   Future<void> start() async {
+    if (_disposed) return;
     WidgetsBinding.instance.addObserver(this);
     _connectionSubscription = _client.onConnectionChanged.listen((connected) {
-      if (connected) {
+      if (connected && !_disposed) {
         unawaited(publishCurrentStatus(force: true));
       }
     });
     _timer = Timer.periodic(
       _pollInterval,
-      (_) => unawaited(publishCurrentStatus()),
+      (_) {
+        if (!_disposed) unawaited(publishCurrentStatus());
+      },
     );
     await publishCurrentStatus();
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose() {
+    _disposed = true;
+    return _disposeFuture ??= _performDispose();
+  }
+
+  Future<void> _performDispose() async {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
-    await _connectionSubscription?.cancel();
+    _timer = null;
+    final connectionSubscription = _connectionSubscription;
+    _connectionSubscription = null;
+    try {
+      await connectionSubscription?.cancel();
+    } finally {
+      await _activePublication;
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (!_disposed && state == AppLifecycleState.resumed) {
       unawaited(publishCurrentStatus());
     }
   }
 
-  Future<void> publishCurrentStatus({bool force = false}) async {
-    if (_publishing || !_client.isConnected) {
-      return;
+  Future<void> publishCurrentStatus({bool force = false}) {
+    if (_disposed || _activePublication != null || !_client.isConnected) {
+      return Future<void>.value();
     }
-    _publishing = true;
+
+    final publication = _publishCurrentStatus(force: force);
+    _activePublication = publication;
+    unawaited(
+      publication.then<void>((_) {
+        if (identical(_activePublication, publication)) {
+          _activePublication = null;
+        }
+      }),
+    );
+    return publication;
+  }
+
+  Future<void> _publishCurrentStatus({required bool force}) async {
     try {
       final status = await _readCurrentStatus();
-      if (status == null ||
+      if (_disposed ||
+          status == null ||
           status.isEmpty ||
           (!force && !_shouldPublish(status))) {
         return;
@@ -85,12 +119,11 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
         sourcePlatform: status['sourcePlatform'] as String?,
         observedAt: DateTime.now().toUtc().toIso8601String(),
       );
+      if (_disposed) return;
       _lastPublished = Map<String, Object?>.from(status);
       _lastPublishedElapsed = _monotonicNow();
     } catch (error) {
       debugPrint('[Device Status] Failed to publish local status: $error');
-    } finally {
-      _publishing = false;
     }
   }
 
@@ -122,6 +155,10 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
   }
 
   Future<Map<String, Object?>?> _readCurrentStatus() async {
+    final readCurrentStatus = _readCurrentStatusOverride;
+    if (readCurrentStatus != null) {
+      return readCurrentStatus();
+    }
     if (Platform.isAndroid) {
       final value = await _androidChannel.invokeMethod<Object?>(
         'getDeviceStatus',

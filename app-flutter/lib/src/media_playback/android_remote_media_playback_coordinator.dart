@@ -33,7 +33,10 @@ class AndroidRemoteMediaPlaybackCoordinator {
   final Map<String, Map<String, dynamic>> _earlyActionResults =
       <String, Map<String, dynamic>>{};
   final Set<String> _dispatchingActionKeys = <String>{};
+  final Set<Future<dynamic>> _activeWork = <Future<dynamic>>{};
   Future<void> _nativeSyncTail = Future<void>.value();
+  Future<void>? _disposeFuture;
+  bool _disposed = false;
   String? _localDeviceId;
 
   StreamSubscription<Map<String, dynamic>>? _postedSub;
@@ -42,8 +45,13 @@ class AndroidRemoteMediaPlaybackCoordinator {
   StreamSubscription<Map<String, dynamic>>? _actionResultSub;
   StreamSubscription<bool>? _connectionSub;
 
-  Future<void> start() async {
-    if (!AndroidShell.isSupported) {
+  Future<void> start() {
+    if (_disposed) return Future<void>.value();
+    return _trackWork(_start);
+  }
+
+  Future<void> _start() async {
+    if (_disposed || !AndroidShell.isSupported) {
       return;
     }
 
@@ -51,9 +59,12 @@ class AndroidRemoteMediaPlaybackCoordinator {
     _updatedSub = _client.onMediaPlaybackUpdated.listen(_upsertPlayback);
     _removedSub = _client.onMediaPlaybackRemoved.listen(_removePlayback);
     _actionResultSub = _client.onMediaPlaybackActionResult.listen((result) {
-      unawaited(_handleActionResult(result));
+      if (!_disposed) {
+        unawaited(_trackWork(() => _handleActionResult(result)));
+      }
     });
     _connectionSub = _client.onConnectionChanged.listen((isConnected) {
+      if (_disposed) return;
       if (isConnected) {
         unawaited(refresh());
       } else {
@@ -64,16 +75,51 @@ class AndroidRemoteMediaPlaybackCoordinator {
     await refresh();
   }
 
-  Future<void> dispose() async {
-    await _postedSub?.cancel();
-    await _updatedSub?.cancel();
-    await _removedSub?.cancel();
-    await _actionResultSub?.cancel();
-    await _connectionSub?.cancel();
-    _clearActionState();
+  Future<void> dispose() {
+    _disposed = true;
+    return _disposeFuture ??= _performDispose();
   }
 
-  Future<dynamic> handlePlatformMethodCall(MethodCall call) async {
+  Future<void> _performDispose() async {
+    final subscriptions = <StreamSubscription<dynamic>?>[
+      _postedSub,
+      _updatedSub,
+      _removedSub,
+      _actionResultSub,
+      _connectionSub,
+    ];
+    _postedSub = null;
+    _updatedSub = null;
+    _removedSub = null;
+    _actionResultSub = null;
+    _connectionSub = null;
+    for (final subscription in subscriptions) {
+      try {
+        await subscription?.cancel();
+      } catch (error) {
+        debugPrint('[Media Playback] Failed to cancel subscription: $error');
+      }
+    }
+    _clearActionState();
+    while (_activeWork.isNotEmpty) {
+      final activeWork = List<Future<dynamic>>.of(_activeWork);
+      for (final work in activeWork) {
+        try {
+          await work;
+        } catch (_) {}
+      }
+    }
+    try {
+      await _nativeSyncTail;
+    } catch (_) {}
+  }
+
+  Future<dynamic> handlePlatformMethodCall(MethodCall call) {
+    if (_disposed) return Future<dynamic>.value(null);
+    return _trackWork(() => _handlePlatformMethodCall(call));
+  }
+
+  Future<dynamic> _handlePlatformMethodCall(MethodCall call) async {
     if (call.method != 'mediaPlaybackAction') {
       return null;
     }
@@ -129,6 +175,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
         action: action,
         positionMs: positionMs,
       );
+      if (_disposed) return false;
       if (rawResult is! Map) {
         throw StateError('Playback action response must be an object');
       }
@@ -178,22 +225,31 @@ class AndroidRemoteMediaPlaybackCoordinator {
       }
       return true;
     } catch (error) {
-      debugPrint('[Media Playback] Failed to perform remote action: $error');
-      unawaited(refresh());
+      if (!_disposed) {
+        debugPrint('[Media Playback] Failed to perform remote action: $error');
+        unawaited(refresh());
+      }
       return false;
     } finally {
       _dispatchingActionKeys.remove(actionKey);
     }
   }
 
-  Future<void> refresh() async {
-    if (!AndroidShell.isSupported || !_client.isConnected) {
+  Future<void> refresh() {
+    if (_disposed) return Future<void>.value();
+    return _trackWork(_refresh);
+  }
+
+  Future<void> _refresh() async {
+    if (_disposed || !AndroidShell.isSupported || !_client.isConnected) {
       return;
     }
 
     try {
       await _ensureLocalDeviceId();
+      if (_disposed) return;
       final result = await _client.listMediaPlayback();
+      if (_disposed) return;
       final playbacks = List<Map<String, dynamic>>.from(
         (result['playbacks'] as List? ?? const <dynamic>[]).map(
           (item) => Map<String, dynamic>.from(item as Map),
@@ -215,15 +271,18 @@ class AndroidRemoteMediaPlaybackCoordinator {
       }
       await _queueNativeStateSync();
     } catch (error) {
-      debugPrint(
-        '[Media Playback] Failed to refresh mirrored playbacks: $error',
-      );
+      if (!_disposed) {
+        debugPrint(
+          '[Media Playback] Failed to refresh mirrored playbacks: $error',
+        );
+      }
     }
   }
 
   Future<void> _ensureLocalDeviceId() async {
-    if (_localDeviceId != null) return;
+    if (_disposed || _localDeviceId != null) return;
     final info = await _client.getDeviceInfo();
+    if (_disposed) return;
     if (info is Map) {
       final deviceId = info['deviceId']?.toString();
       if (deviceId != null && deviceId.isNotEmpty) {
@@ -242,7 +301,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
   }
 
   void _upsertPlayback(Map<String, dynamic> playback) {
-    if (!_isRemotePlayback(playback)) {
+    if (_disposed || !_isRemotePlayback(playback)) {
       return;
     }
     final key = _keyFor(playback);
@@ -254,6 +313,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
   }
 
   void _removePlayback(Map<String, dynamic> playback) {
+    if (_disposed) return;
     final key = _keyFor(playback);
     _clearPlaybackOwnership(key);
     _playbacksByKey.remove(key);
@@ -265,6 +325,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
     Map<String, dynamic> result, {
     bool bufferUnknown = true,
   }) async {
+    if (_disposed) return;
     final operationId = result['operationId']?.toString();
     if (operationId == null || !_uuidV4.hasMatch(operationId)) {
       debugPrint('[Media Playback] Ignored action result without a valid ID');
@@ -340,16 +401,27 @@ class AndroidRemoteMediaPlaybackCoordinator {
   void _scheduleSuccessfulActionReconciliation(
     _PendingRemoteMediaAction pending,
   ) {
+    if (_disposed) return;
     final key = pending.playbackKey;
     _reconciliationTimersByPlaybackKey.remove(key)?.cancel();
     _reconciliationTimersByPlaybackKey[key] = Timer(
       _successfulActionReconciliationDelay,
-      () => unawaited(_refreshPlayback(pending)),
+      () {
+        if (!_disposed) unawaited(_refreshPlayback(pending));
+      },
     );
   }
 
-  Future<void> _refreshPlayback(_PendingRemoteMediaAction pending) async {
-    if (!_client.isConnected ||
+  Future<void> _refreshPlayback(_PendingRemoteMediaAction pending) {
+    if (_disposed) return Future<void>.value();
+    return _trackWork(() => _performRefreshPlayback(pending));
+  }
+
+  Future<void> _performRefreshPlayback(
+    _PendingRemoteMediaAction pending,
+  ) async {
+    if (_disposed ||
+        !_client.isConnected ||
         _latestOperationIdsByPlaybackKey[pending.playbackKey] !=
             pending.operationId) {
       return;
@@ -361,7 +433,8 @@ class AndroidRemoteMediaPlaybackCoordinator {
         sourceDeviceId: pending.sourceDeviceId,
         playbackId: pending.playbackId,
       );
-      if (result is! Map ||
+      if (_disposed ||
+          result is! Map ||
           _latestOperationIdsByPlaybackKey[pending.playbackKey] !=
               pending.operationId ||
           (_playbackRevisions[pending.playbackKey] ?? 0) != expectedRevision) {
@@ -379,10 +452,12 @@ class AndroidRemoteMediaPlaybackCoordinator {
       _nextRevision(pending.playbackKey);
       await _queueNativeStateSync();
     } catch (error) {
-      debugPrint(
-        '[Media Playback] Failed to reconcile operation '
-        '${pending.operationId}: $error',
-      );
+      if (!_disposed) {
+        debugPrint(
+          '[Media Playback] Failed to reconcile operation '
+          '${pending.operationId}: $error',
+        );
+      }
     }
   }
 
@@ -444,14 +519,32 @@ class AndroidRemoteMediaPlaybackCoordinator {
     return revision;
   }
 
+  Future<T> _trackWork<T>(Future<T> Function() operation) {
+    final future = operation();
+    _activeWork.add(future);
+    unawaited(
+      future.then<void>(
+        (_) => _activeWork.remove(future),
+        onError: (Object _, StackTrace __) {
+          _activeWork.remove(future);
+        },
+      ),
+    );
+    return future;
+  }
+
   Future<void> _queueNativeStateSync() {
+    if (_disposed) return Future<void>.value();
     late final Future<void> next;
-    next = _nativeSyncTail.catchError((_) {}).then((_) => _syncNativeState());
+    next = _nativeSyncTail.catchError((_) {}).then<void>((_) async {
+      if (!_disposed) await _syncNativeState();
+    });
     _nativeSyncTail = next.catchError((_) {});
     return next;
   }
 
   Future<void> _syncNativeState() async {
+    if (_disposed) return;
     final playback = _selectCurrentPlayback();
     if (playback == null) {
       await AndroidShell.clearMediaPlayback();

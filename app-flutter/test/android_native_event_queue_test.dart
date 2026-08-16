@@ -547,6 +547,32 @@ void main() {
     });
   });
 
+  test('dispose waits for an active dispatch', () async {
+    final dispatchStarted = Completer<void>();
+    final dispatchGate = Completer<void>();
+    final queue = AndroidNativeEventQueue(
+      dispatch: (event) async {
+        dispatchStarted.complete();
+        await dispatchGate.future;
+        return AndroidNativeEventDispatchResult.delivered;
+      },
+    )..onConnected();
+    queue.enqueue(mediaEvent('updated', 'playback-1'));
+    final flush = queue.flush();
+    await dispatchStarted.future;
+    var disposeComplete = false;
+    final dispose = queue.dispose().then((_) {
+      disposeComplete = true;
+    });
+
+    await Future<void>.delayed(Duration.zero);
+    expect(disposeComplete, isFalse);
+
+    dispatchGate.complete();
+    await Future.wait<void>([flush, dispose]);
+    expect(disposeComplete, isTrue);
+  });
+
   test('dispose drops queued work and rejects later native events', () async {
     var dispatches = 0;
     final queue = AndroidNativeEventQueue(
@@ -559,8 +585,8 @@ void main() {
     queue.enqueue(notificationEvent('posted', 'notification-1'));
     queue.enqueue(mediaAction('play', playbackId: 'playback-1'));
 
-    queue.dispose();
-    queue.dispose();
+    await queue.dispose();
+    await queue.dispose();
 
     expect(queue.isDisposed, isTrue);
     expect(queue, isEmpty);

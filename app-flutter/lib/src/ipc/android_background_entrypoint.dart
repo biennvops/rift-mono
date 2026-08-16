@@ -67,9 +67,12 @@ class AndroidBackgroundRuntimeShutdown {
   Future<void> _performShutdown() async {
     _logger?.call('Dart runtime shutdown started');
     await _runStep('event producers', _stopEventProducers);
-    await _runStep('remote media', _disposeRemoteMedia);
-    await _runStep('device status', _disposeDeviceStatusPublisher);
+    final remoteMediaDispose = _runStep('remote media', _disposeRemoteMedia);
+    final deviceStatusDispose =
+        _runStep('device status', _disposeDeviceStatusPublisher);
     await _runStep('JSON-RPC client', _disposeClient);
+    await remoteMediaDispose;
+    await deviceStatusDispose;
     await _runStep('owned async work', _drainOwnedWork);
     _logger?.call('Dart runtime shutdown complete');
   }
@@ -100,6 +103,7 @@ Future<void> runAndroidBackgroundMain() async {
   Future<void>? deviceStatusPublisherStart;
   AndroidRemoteMediaPlaybackCoordinator? remoteMedia;
   Future<void>? remoteMediaStart;
+  Future<void>? nativeEventQueueDispose;
   late final AndroidBackgroundRuntimeShutdown runtimeShutdown;
 
   Future<void> enqueueMirroredNotificationLifecycle(
@@ -209,7 +213,7 @@ Future<void> runAndroidBackgroundMain() async {
   );
   runtimeShutdown = AndroidBackgroundRuntimeShutdown(
     stopEventProducers: () async {
-      nativeEventQueue.dispose();
+      nativeEventQueueDispose ??= nativeEventQueue.dispose();
       final subscriptions = List<StreamSubscription<dynamic>>.of(
         ownedSubscriptions,
       );
@@ -236,6 +240,9 @@ Future<void> runAndroidBackgroundMain() async {
     },
     disposeClient: client.dispose,
     drainOwnedWork: () async {
+      try {
+        await nativeEventQueueDispose;
+      } catch (_) {}
       final remoteStart = remoteMediaStart;
       final deviceStatusStart = deviceStatusPublisherStart;
       remoteMediaStart = null;

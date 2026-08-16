@@ -85,6 +85,7 @@ class AndroidNativeEventQueue {
   bool _flushRequested = false;
   bool _disposed = false;
   Completer<void>? _activeFlush;
+  Future<void>? _disposeFuture;
 
   int get length => _events.length;
 
@@ -490,19 +491,21 @@ class AndroidNativeEventQueue {
     return true;
   }
 
-  void dispose() {
-    if (_disposed) return;
-    _disposed = true;
-    _isConnected = false;
-    _notificationPolicyReady = false;
-    _connectionGeneration += 1;
-    _flushRequested = false;
-    final droppedEvents = _events.length;
-    _events.clear();
-    _log(
-      'native event queue disposed generation=$_connectionGeneration '
-      'droppedEvents=$droppedEvents',
-    );
+  Future<void> dispose() {
+    if (!_disposed) {
+      _disposed = true;
+      _isConnected = false;
+      _notificationPolicyReady = false;
+      _connectionGeneration += 1;
+      _flushRequested = false;
+      final droppedEvents = _events.length;
+      _events.clear();
+      _log(
+        'native event queue disposed generation=$_connectionGeneration '
+        'droppedEvents=$droppedEvents',
+      );
+    }
+    return _disposeFuture ??= _activeFlush?.future ?? Future<void>.value();
   }
 
   void _wakeActiveFlush() {
