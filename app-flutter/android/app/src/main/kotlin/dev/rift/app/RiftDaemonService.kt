@@ -12,7 +12,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
@@ -32,6 +35,8 @@ class RiftDaemonService : Service() {
         private const val mirroredNotificationId = 4110
         private const val actionStart = "dev.rift.app.action.START_DAEMON_SERVICE"
         private const val actionStop = "dev.rift.app.action.STOP_DAEMON_SERVICE"
+        private const val shutdownFallbackDelayMs = 5_000L
+        private const val logTag = "RiftDaemonService"
         internal const val preferencesName = "rift_background_sync"
         internal const val backgroundEnabledKey = "enabled"
 
@@ -62,6 +67,14 @@ class RiftDaemonService : Service() {
     private var tlsBridge: AndroidTlsBridge? = null
     private var mediaObserver: AndroidMediaSessionObserver? = null
     private var remoteMediaPlaybackManager: RemoteMediaPlaybackManager? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var runtimeShutdownStarted = false
+    private var stopServiceAfterShutdown = false
+    private val runtimeFinalizer = RuntimeShutdownFinalizer(::finalizeRuntime)
+    private val shutdownFallback = Runnable {
+        Log.w(logTag, "Shutdown fallback triggered")
+        completeRuntimeShutdown()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -73,8 +86,7 @@ class RiftDaemonService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             actionStop -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                requestRuntimeShutdown(stopServiceAfterward = true)
                 return START_NOT_STICKY
             }
             else -> {
@@ -95,22 +107,103 @@ class RiftDaemonService : Service() {
     }
 
     override fun onDestroy() {
-        mediaObserver?.stopObservation()
-        mediaObserver = null
-        remoteMediaPlaybackManager?.stop()
-        remoteMediaPlaybackManager = null
-        tlsBridge?.dispose()
-        tlsBridge = null
-        RiftBackgroundHost.detachService()
-        engine?.destroy()
-        engine = null
+        requestRuntimeShutdown(stopServiceAfterward = false)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun requestRuntimeShutdown(stopServiceAfterward: Boolean) {
+        stopServiceAfterShutdown = stopServiceAfterShutdown || stopServiceAfterward
+        stopNativeEventProducers()
+        if (runtimeFinalizer.isFinalized() || runtimeShutdownStarted) {
+            return
+        }
+
+        runtimeShutdownStarted = true
+        Log.i(logTag, "Android service shutdown requested")
+        if (engine == null) {
+            completeRuntimeShutdown()
+            return
+        }
+
+        mainHandler.postDelayed(shutdownFallback, shutdownFallbackDelayMs)
+        try {
+            RiftBackgroundHost.requestRuntimeShutdown(
+                object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        Log.i(logTag, "Dart runtime shutdown acknowledged")
+                        completeRuntimeShutdown()
+                    }
+
+                    override fun error(
+                        errorCode: String,
+                        errorMessage: String?,
+                        errorDetails: Any?,
+                    ) {
+                        Log.w(
+                            logTag,
+                            "Dart runtime shutdown failed: $errorCode $errorMessage",
+                        )
+                        completeRuntimeShutdown()
+                    }
+
+                    override fun notImplemented() {
+                        Log.w(logTag, "Dart runtime shutdown is not implemented")
+                        completeRuntimeShutdown()
+                    }
+                },
+            )
+        } catch (error: Exception) {
+            Log.w(logTag, "Unable to request Dart runtime shutdown", error)
+            completeRuntimeShutdown()
+        }
+    }
+
+    private fun stopNativeEventProducers() {
+        RiftBackgroundHost.beginServiceShutdown()
+        mediaObserver?.stopObservation()
+        mediaObserver = null
+        remoteMediaPlaybackManager?.stop()
+        remoteMediaPlaybackManager = null
+    }
+
+    private fun completeRuntimeShutdown() {
+        mainHandler.removeCallbacks(shutdownFallback)
+        if (!runtimeFinalizer.finalizeOnce()) {
+            return
+        }
+        if (stopServiceAfterShutdown) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    private fun finalizeRuntime() {
+        val nativeTlsBridge = tlsBridge
+        tlsBridge = null
+        val flutterEngine = engine
+        engine = null
+        try {
+            nativeTlsBridge?.dispose()
+        } catch (error: Exception) {
+            Log.w(logTag, "Failed to dispose native TLS bridge", error)
+        }
+        try {
+            RiftBackgroundHost.detachService()
+        } catch (error: Exception) {
+            Log.w(logTag, "Failed to detach background host", error)
+        }
+        try {
+            flutterEngine?.destroy()
+        } catch (error: Exception) {
+            Log.w(logTag, "Failed to destroy Flutter engine", error)
+        }
+        Log.i(logTag, "Native service runtime finalized")
+    }
+
     private fun startBackgroundRuntime() {
-        if (engine != null) {
+        if (engine != null || runtimeShutdownStarted) {
             return
         }
 

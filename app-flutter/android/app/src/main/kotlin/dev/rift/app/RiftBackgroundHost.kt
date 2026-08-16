@@ -15,6 +15,7 @@ object RiftBackgroundHost {
     private var serviceBridge: MethodChannel? = null
     private var serviceContext: Context? = null
     private var serviceReady = false
+    private var serviceStopping = false
     private var uiEventSink: EventChannel.EventSink? = null
     private val queuedUiRequests = ArrayDeque<String>()
     private val queuedNativeEvents = ArrayDeque<Map<String, Any?>>()
@@ -30,6 +31,7 @@ object RiftBackgroundHost {
         serviceContext = context.applicationContext
         nativeCommandHandler = commandHandler
         serviceReady = false
+        serviceStopping = false
         serviceBridge = MethodChannel(
             engine.dartExecutor.binaryMessenger,
             serviceBridgeChannelName,
@@ -37,14 +39,16 @@ object RiftBackgroundHost {
             channel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "backgroundReady" -> {
-                        serviceReady = true
-                        flushQueuedMessages()
-                        serviceContext?.let { context ->
-                            NotificationSyncRelay.drainPendingEvents(context).forEach {
-                                serviceBridge?.invokeMethod("nativeEvent", it, ignoreResult)
+                        if (!serviceStopping) {
+                            serviceReady = true
+                            flushQueuedMessages()
+                            serviceContext?.let { context ->
+                                NotificationSyncRelay.drainPendingEvents(context).forEach {
+                                    serviceBridge?.invokeMethod("nativeEvent", it, ignoreResult)
+                                }
                             }
                         }
-                        result.success(true)
+                        result.success(!serviceStopping)
                     }
                     "daemonMessage" -> {
                         val message = call.arguments as? String
@@ -67,9 +71,32 @@ object RiftBackgroundHost {
     }
 
     @Synchronized
+    fun beginServiceShutdown() {
+        serviceReady = false
+        serviceStopping = true
+        nativeCommandHandler = null
+        queuedNativeEvents.removeAll { it["eventType"] == "mediaPlaybackAction" }
+    }
+
+    @Synchronized
+    fun requestRuntimeShutdown(result: MethodChannel.Result) {
+        val bridge = serviceBridge
+        if (bridge == null) {
+            result.error(
+                "runtime_unavailable",
+                "Rift background runtime is unavailable",
+                null,
+            )
+            return
+        }
+        bridge.invokeMethod("shutdown", null, result)
+    }
+
+    @Synchronized
     fun detachService() {
         serviceReady = false
         serviceContext = null
+        serviceBridge?.setMethodCallHandler(null)
         serviceBridge = null
         nativeCommandHandler = null
     }
@@ -103,6 +130,9 @@ object RiftBackgroundHost {
 
     @Synchronized
     fun sendNativeEvent(context: Context, event: Map<String, Any?>) {
+        if (serviceStopping && event["eventType"] == "mediaPlaybackAction") {
+            return
+        }
         val bridge = serviceBridge
         if (!serviceReady || bridge == null) {
             if (event["notificationId"] is String) {
@@ -132,7 +162,7 @@ object RiftBackgroundHost {
     @Synchronized
     fun flushQueuedMessages() {
         val bridge = serviceBridge ?: return
-        if (!serviceReady) return
+        if (!serviceReady || serviceStopping) return
 
         while (queuedUiRequests.isNotEmpty()) {
             bridge.invokeMethod("uiRequest", queuedUiRequests.removeFirst(), ignoreResult)
