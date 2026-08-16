@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
@@ -31,6 +32,12 @@ class FileTransferService {
   final Map<String, _IncomingTransferState> _incomingTransfers = {};
 
   late final StreamSubscription<void> _messageSub;
+  late final StreamSubscription<SessionContext> _trustedSessionReadySub;
+  final Set<Future<void>> _messageWork = {};
+  final Map<String, Future<void>> _resumeWorkByPeer = {};
+  final Set<String> _pendingResumePeers = {};
+  bool _disposed = false;
+  Future<void>? _disposeFuture;
 
   final _fileOfferController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -53,22 +60,83 @@ class FileTransferService {
     required this._operationManager,
     required this._localDeviceId,
     required this._storagePath,
+    Stream<SessionContext>? trustedSessionReady,
   }) {
     _messageSub = _sessionManager.onMessage
-        .asyncMap(_handleMessage)
+        .asyncMap(_handleMessageOwned)
         .listen((_) {});
-    _sessionManager.onTrustedSessionReady.listen((ctx) {
-      unawaited(_sendResumeRequestsForPeer(ctx.peerDeviceId));
-    });
+    _trustedSessionReadySub =
+        (trustedSessionReady ?? _sessionManager.onTrustedSessionReady).listen(
+          _handleTrustedSessionReady,
+        );
   }
 
-  Future<void> dispose() async {
-    await _messageSub.cancel();
+  Future<void> dispose() => _disposeFuture ??= _dispose();
+
+  Future<void> _dispose() async {
+    _disposed = true;
+    _pendingResumePeers.clear();
+    await Future.wait([_messageSub.cancel(), _trustedSessionReadySub.cancel()]);
+    await Future.wait([..._messageWork, ..._resumeWorkByPeer.values]);
     await _fileOfferController.close();
     await _progressController.close();
     await _completedController.close();
     await _failedController.close();
   }
+
+  Future<void> _handleMessageOwned(ProtocolMessage message) {
+    if (_disposed) return Future<void>.value();
+
+    late final Future<void> work;
+    work = _handleMessage(
+      message,
+    ).whenComplete(() => _messageWork.remove(work));
+    _messageWork.add(work);
+    return work;
+  }
+
+  void _handleTrustedSessionReady(SessionContext context) {
+    if (_disposed) return;
+
+    final peerDeviceId = context.peerDeviceId;
+    if (_resumeWorkByPeer.containsKey(peerDeviceId)) {
+      _pendingResumePeers.add(peerDeviceId);
+      RiftLog.debug(
+        '[FileTransfer] Resume reconciliation queued peer=$peerDeviceId',
+      );
+      return;
+    }
+
+    late final Future<void> work;
+    work = _runResumeRequestsForPeer(peerDeviceId).whenComplete(() {
+      if (identical(_resumeWorkByPeer[peerDeviceId], work)) {
+        _resumeWorkByPeer.remove(peerDeviceId);
+      }
+    });
+    _resumeWorkByPeer[peerDeviceId] = work;
+  }
+
+  Future<void> _runResumeRequestsForPeer(String peerDeviceId) async {
+    do {
+      _pendingResumePeers.remove(peerDeviceId);
+      RiftLog.debug(
+        '[FileTransfer] Resume reconciliation started peer=$peerDeviceId',
+      );
+      try {
+        await _sendResumeRequestsForPeer(peerDeviceId);
+      } catch (error, stackTrace) {
+        RiftLog.error(
+          '[FileTransfer] Resume reconciliation failed peer=$peerDeviceId',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    } while (!_disposed && _pendingResumePeers.contains(peerDeviceId));
+  }
+
+  @visibleForTesting
+  Future<void>? resumeWorkForPeerForTesting(String peerDeviceId) =>
+      _resumeWorkByPeer[peerDeviceId];
 
   Future<OfferFileResult> offerFile({
     required String targetDeviceId,
@@ -379,6 +447,8 @@ class FileTransferService {
   }
 
   Future<void> _handleMessage(ProtocolMessage msg) async {
+    if (_disposed) return;
+
     final type = msg.payload['type'] as String?;
     if (type == null || !type.startsWith('file.')) {
       return;
@@ -740,10 +810,7 @@ class FileTransferService {
       );
     }
     if (transfer.state != 'paused' || transfer.sendTask != null) {
-      throw const RiftException(
-        -32001,
-        'Outgoing transfer is not paused.',
-      );
+      throw const RiftException(-32001, 'Outgoing transfer is not paused.');
     }
     if (offset < 0 || offset > transfer.byteSize) {
       throw const RiftException(-32001, 'Resume offset was out of bounds.');
@@ -755,8 +822,7 @@ class FileTransferService {
     final hasValidChunkIndex = transfer.byteSize == 0
         ? nextChunkIndex == 0 || nextChunkIndex == 1
         : nextChunkIndex == expectedNextChunkIndex;
-    if ((!isFinalOffset && offset % chunkSize != 0) ||
-        !hasValidChunkIndex) {
+    if ((!isFinalOffset && offset % chunkSize != 0) || !hasValidChunkIndex) {
       throw const RiftException(
         -32001,
         'Resume chunk index did not match the declared offset.',
@@ -797,6 +863,8 @@ class FileTransferService {
   }
 
   Future<void> _sendResumeRequestsForPeer(String peerDeviceId) async {
+    if (_disposed) return;
+
     final resumableTransfers = _incomingTransfers.values
         .where((transfer) => transfer.sourceDeviceId == peerDeviceId)
         .toList(growable: false);
@@ -805,6 +873,8 @@ class FileTransferService {
     }
 
     for (final transfer in resumableTransfers) {
+      if (_disposed) return;
+
       try {
         await _sessionManager.sendMessage(peerDeviceId, {
           'rift': '0.1-draft',
@@ -819,7 +889,13 @@ class FileTransferService {
             'offset': transfer.bytesTransferred,
           },
         });
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        RiftLog.error(
+          '[FileTransfer] Resume reconciliation failed peer=$peerDeviceId',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
     }
   }
 

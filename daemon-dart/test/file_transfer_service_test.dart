@@ -72,6 +72,97 @@ class FakeTransport implements Transport {
   }
 }
 
+class ControlledResumeTransport extends FakeTransport {
+  final Map<String, int> resumeCallsByPeer = {};
+  final Map<String, int> activeResumeCallsByPeer = {};
+  final Map<String, int> maxActiveResumeCallsByPeer = {};
+  final Map<String, Completer<void>> _resumeBlockers = {};
+  final Map<String, int> _resumeFailuresRemaining = {};
+  final List<({String peerDeviceId, int count, Completer<void> completer})>
+  _resumeWaiters = [];
+
+  int activeResumeCalls = 0;
+  int maxActiveResumeCalls = 0;
+
+  void blockResume(String peerDeviceId) {
+    _resumeBlockers[peerDeviceId] = Completer<void>();
+  }
+
+  void releaseResume(String peerDeviceId) {
+    final blocker = _resumeBlockers.remove(peerDeviceId);
+    if (blocker != null && !blocker.isCompleted) {
+      blocker.complete();
+    }
+  }
+
+  void failNextResume(String peerDeviceId) {
+    _resumeFailuresRemaining[peerDeviceId] =
+        (_resumeFailuresRemaining[peerDeviceId] ?? 0) + 1;
+  }
+
+  Future<void> waitForResumeCount(String peerDeviceId, int count) {
+    if ((resumeCallsByPeer[peerDeviceId] ?? 0) >= count) {
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    _resumeWaiters.add((
+      peerDeviceId: peerDeviceId,
+      count: count,
+      completer: completer,
+    ));
+    return completer.future;
+  }
+
+  @override
+  Future<void> sendMessage(String deviceId, Uint8List payload) async {
+    final decoded = json.decode(utf8.decode(payload)) as Map<String, dynamic>;
+    if (decoded['type'] != 'file.resume') {
+      await super.sendMessage(deviceId, payload);
+      return;
+    }
+
+    sentMessages.add(decoded);
+    final peerCalls = (resumeCallsByPeer[deviceId] ?? 0) + 1;
+    resumeCallsByPeer[deviceId] = peerCalls;
+    activeResumeCalls++;
+    activeResumeCallsByPeer[deviceId] =
+        (activeResumeCallsByPeer[deviceId] ?? 0) + 1;
+    if (activeResumeCalls > maxActiveResumeCalls) {
+      maxActiveResumeCalls = activeResumeCalls;
+    }
+    final peerActive = activeResumeCallsByPeer[deviceId]!;
+    if (peerActive > (maxActiveResumeCallsByPeer[deviceId] ?? 0)) {
+      maxActiveResumeCallsByPeer[deviceId] = peerActive;
+    }
+    _completeResumeWaiters(deviceId, peerCalls);
+
+    try {
+      final blocker = _resumeBlockers[deviceId];
+      if (blocker != null) {
+        await blocker.future;
+      }
+      final failuresRemaining = _resumeFailuresRemaining[deviceId] ?? 0;
+      if (failuresRemaining > 0) {
+        _resumeFailuresRemaining[deviceId] = failuresRemaining - 1;
+        throw const SocketException('simulated resume failure');
+      }
+    } finally {
+      activeResumeCalls--;
+      activeResumeCallsByPeer[deviceId] =
+          activeResumeCallsByPeer[deviceId]! - 1;
+    }
+  }
+
+  void _completeResumeWaiters(String peerDeviceId, int count) {
+    for (final waiter in List.of(_resumeWaiters)) {
+      if (waiter.peerDeviceId == peerDeviceId && waiter.count <= count) {
+        _resumeWaiters.remove(waiter);
+        waiter.completer.complete();
+      }
+    }
+  }
+}
+
 class CancelOnFirstChunkTransport extends FakeTransport {
   CancelOnFirstChunkTransport(this.peerDeviceId);
 
@@ -261,6 +352,64 @@ class FakeTrustStore implements TrustStore {
   Future<int> countSecurityEvents(SecurityEventQuery query) async => 0;
 }
 
+SessionContext _ensureFileTransferContext(
+  SessionManager sessionManager,
+  String peerDeviceId,
+) {
+  final existing = sessionManager.getContext(peerDeviceId);
+  if (existing != null) return existing;
+
+  final context = SessionContext(peerDeviceId: peerDeviceId, isInitiator: true)
+    ..handshakeState = HandshakeState.established
+    ..trustState = TrustState.trusted
+    ..capabilityNegotiated = true
+    ..negotiatedCapabilities = [Capability(name: 'file.transfer', version: 1)];
+  sessionManager.injectContextForTesting(context);
+  return context;
+}
+
+Future<SessionContext> _addResumableIncomingTransfer({
+  required FileTransferService service,
+  required FakeTransport transport,
+  required SessionManager sessionManager,
+  required Directory tempDir,
+  required String peerDeviceId,
+  required String transferId,
+  required String messageId,
+}) async {
+  final context = _ensureFileTransferContext(sessionManager, peerDeviceId);
+  final offerReceived = service.onFileOffer.firstWhere(
+    (offer) => offer['transferId'] == transferId,
+  );
+  transport.simulateIncomingMessage(peerDeviceId, {
+    'rift': '0.1-draft',
+    'messageId': messageId,
+    'type': 'file.offer',
+    'sourceDeviceId': peerDeviceId,
+    'destinationDeviceId': 'rift-local',
+    'payload': {
+      'transferId': transferId,
+      'fileName': '$transferId.txt',
+      'mediaType': 'text/plain',
+      'byteSize': 5,
+      'sha256':
+          '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+      'chunkSize': 262144,
+      'chunkCount': 1,
+      'expiresInMs': 300000,
+      'sourceDeviceId': peerDeviceId,
+      'requiredCapability': 'file.transfer',
+    },
+  });
+  await offerReceived;
+  await service.acceptFileOffer(
+    transferId: transferId,
+    destinationPath:
+        '${tempDir.path}${Platform.pathSeparator}$peerDeviceId-$transferId.txt',
+  );
+  return context;
+}
+
 void main() {
   group('FileTransferService', () {
     late FakeTransport transport;
@@ -268,8 +417,10 @@ void main() {
     late OperationManager operationManager;
     late FileTransferService service;
     late Directory tempDir;
+    StreamController<SessionContext>? trustedReadyController;
 
     setUp(() async {
+      trustedReadyController = null;
       transport = FakeTransport();
       sessionManager = SessionManager(
         transport,
@@ -300,12 +451,43 @@ void main() {
 
     tearDown(() async {
       await service.dispose();
+      await trustedReadyController?.close();
       operationManager.dispose();
-      sessionManager.dispose();
+      await sessionManager.dispose();
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
     });
+
+    Future<ControlledResumeTransport> useControlledResumeTransport() async {
+      await service.dispose();
+      await sessionManager.dispose();
+
+      final controlledTransport = ControlledResumeTransport();
+      final readyController = StreamController<SessionContext>.broadcast(
+        sync: true,
+      );
+      trustedReadyController = readyController;
+      transport = controlledTransport;
+      sessionManager = SessionManager(
+        transport,
+        FakeIdentityManager(),
+        FakeTrustStore(),
+      );
+      service = FileTransferService(
+        sessionManager: sessionManager,
+        trustStore: FakeTrustStore(),
+        operationManager: operationManager,
+        localDeviceId: 'rift-local',
+        storagePath: tempDir.path,
+        trustedSessionReady: readyController.stream,
+      );
+      return controlledTransport;
+    }
+
+    void emitTrustedSessionReady(SessionContext context) {
+      trustedReadyController!.add(context);
+    }
 
     test('stores incoming file offers and emits notification payload', () async {
       final offerFuture = service.onFileOffer.first;
@@ -368,7 +550,10 @@ void main() {
 
       final offers = service.listIncomingFileOffers();
       expect(offers, hasLength(1));
-      expect(offers.single['transferId'], 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      expect(
+        offers.single['transferId'],
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      );
       expect(offers.single['byteSize'], 33554433);
       expect(offers.single['chunkCount'], 129);
     });
@@ -574,10 +759,7 @@ void main() {
         ),
         isFalse,
       );
-      expect(
-        service.listFileTransfers().single['state'],
-        'dispatched',
-      );
+      expect(service.listFileTransfers().single['state'], 'dispatched');
     });
 
     test('rejects resume while an outgoing transfer is active', () async {
@@ -757,89 +939,96 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       expect(
-        transport.sentMessages.where((message) => message['type'] == 'file.chunk'),
+        transport.sentMessages.where(
+          (message) => message['type'] == 'file.chunk',
+        ),
         hasLength(1),
       );
       expect(
-        transport.sentMessages.any((message) => message['type'] == 'file.complete'),
+        transport.sentMessages.any(
+          (message) => message['type'] == 'file.complete',
+        ),
         isFalse,
       );
     });
 
-    test('preserves outgoing transfer state after recoverable disconnect', () async {
-      await service.dispose();
-      await sessionManager.dispose();
+    test(
+      'preserves outgoing transfer state after recoverable disconnect',
+      () async {
+        await service.dispose();
+        await sessionManager.dispose();
 
-      transport = FailFirstChunkTransport();
-      sessionManager = SessionManager(
-        transport,
-        FakeIdentityManager(),
-        FakeTrustStore(),
-      );
-      service = FileTransferService(
-        sessionManager: sessionManager,
-        trustStore: FakeTrustStore(),
-        operationManager: operationManager,
-        localDeviceId: 'rift-local',
-        storagePath: tempDir.path,
-      );
+        transport = FailFirstChunkTransport();
+        sessionManager = SessionManager(
+          transport,
+          FakeIdentityManager(),
+          FakeTrustStore(),
+        );
+        service = FileTransferService(
+          sessionManager: sessionManager,
+          trustStore: FakeTrustStore(),
+          operationManager: operationManager,
+          localDeviceId: 'rift-local',
+          storagePath: tempDir.path,
+        );
 
-      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
-        ..handshakeState = HandshakeState.established
-        ..trustState = TrustState.trusted
-        ..capabilityNegotiated = true
-        ..negotiatedCapabilities = [
-          Capability(name: 'file.transfer', version: 1),
-        ];
-      sessionManager.injectContextForTesting(ctx);
+        final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
+          ..handshakeState = HandshakeState.established
+          ..trustState = TrustState.trusted
+          ..capabilityNegotiated = true
+          ..negotiatedCapabilities = [
+            Capability(name: 'file.transfer', version: 1),
+          ];
+        sessionManager.injectContextForTesting(ctx);
 
-      final localFile = File(
-        '${tempDir.path}${Platform.pathSeparator}resume-sample.txt',
-      );
-      await localFile.writeAsString('a' * 600000);
+        final localFile = File(
+          '${tempDir.path}${Platform.pathSeparator}resume-sample.txt',
+        );
+        await localFile.writeAsString('a' * 600000);
 
-      final failedFuture = service.onTransferFailed.firstWhere(
-        (event) => event['failureReason'] == 'ConnectionLost',
-      );
+        final failedFuture = service.onTransferFailed.firstWhere(
+          (event) => event['failureReason'] == 'ConnectionLost',
+        );
 
-      final result = await service.offerFile(
-        targetDeviceId: 'rift-peer',
-        localPath: localFile.path,
-        fileName: 'resume-sample.txt',
-      );
+        final result = await service.offerFile(
+          targetDeviceId: 'rift-peer',
+          localPath: localFile.path,
+          fileName: 'resume-sample.txt',
+        );
 
-      transport.simulateIncomingMessage('rift-peer', {
-        'rift': '0.1-draft',
-        'messageId': '78787878-7878-4787-8787-787878787878',
-        'type': 'file.accept',
-        'sourceDeviceId': 'rift-peer',
-        'destinationDeviceId': 'rift-local',
-        'payload': {
-          'transferId': result.transferId,
-          'receivingDeviceId': 'rift-peer',
-          'chunkSize': 262144,
-        },
-      });
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId': '78787878-7878-4787-8787-787878787878',
+          'type': 'file.accept',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': result.transferId,
+            'receivingDeviceId': 'rift-peer',
+            'chunkSize': 262144,
+          },
+        });
 
-      await failedFuture.timeout(const Duration(seconds: 2));
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+        await failedFuture.timeout(const Duration(seconds: 2));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      final transfers = service.listFileTransfers();
-      expect(
-        transfers.any(
-          (transfer) =>
-              transfer['transferId'] == result.transferId &&
-              transfer['direction'] == 'outgoing' &&
-              transfer['state'] == 'paused' &&
-              transfer['failureReason'] == 'ConnectionLost',
-        ),
-        isTrue,
-      );
-      expect(
-        operationManager.getOperation(result.operationId).state,
-        OperationState.active,
-      );
-    });
+        final transfers = service.listFileTransfers();
+        expect(
+          transfers.any(
+            (transfer) =>
+                transfer['transferId'] == result.transferId &&
+                transfer['direction'] == 'outgoing' &&
+                transfer['state'] == 'paused' &&
+                transfer['failureReason'] == 'ConnectionLost',
+          ),
+          isTrue,
+        );
+        expect(
+          operationManager.getOperation(result.operationId).state,
+          OperationState.active,
+        );
+      },
+    );
 
     test('resumes outgoing transfer from requested offset', () async {
       await service.dispose();
@@ -896,8 +1085,12 @@ void main() {
       });
       await failedFuture.timeout(const Duration(seconds: 2));
 
-      transport.sentMessages.removeWhere((message) => message['type'] == 'file.chunk');
-      transport.sentMessages.removeWhere((message) => message['type'] == 'file.complete');
+      transport.sentMessages.removeWhere(
+        (message) => message['type'] == 'file.chunk',
+      );
+      transport.sentMessages.removeWhere(
+        (message) => message['type'] == 'file.complete',
+      );
       final completedFuture = service.onTransferCompleted.firstWhere(
         (event) => event['transferId'] == result.transferId,
       );
@@ -1336,87 +1529,341 @@ void main() {
       },
     );
 
-    test('processes large final chunk before completion from same peer', () async {
-      const transferId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-      final content = 'a' * 600000;
-      final bytes = utf8.encode(content);
-      final sha256Hex = sha256.convert(bytes).toString();
-      final destinationPath =
-          '${tempDir.path}${Platform.pathSeparator}received-large.txt';
-      final completedFuture = service.onTransferCompleted.firstWhere(
-        (event) => event['transferId'] == transferId,
-      );
+    test(
+      'processes large final chunk before completion from same peer',
+      () async {
+        const transferId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+        final content = 'a' * 600000;
+        final bytes = utf8.encode(content);
+        final sha256Hex = sha256.convert(bytes).toString();
+        final destinationPath =
+            '${tempDir.path}${Platform.pathSeparator}received-large.txt';
+        final completedFuture = service.onTransferCompleted.firstWhere(
+          (event) => event['transferId'] == transferId,
+        );
 
-      transport.simulateIncomingMessage('rift-peer', {
-        'rift': '0.1-draft',
-        'messageId': '15151515-1515-4515-8515-151515151515',
-        'type': 'file.offer',
-        'sourceDeviceId': 'rift-peer',
-        'destinationDeviceId': 'rift-local',
-        'payload': {
-          'transferId': transferId,
-          'fileName': 'large.txt',
-          'mediaType': 'text/plain',
-          'byteSize': bytes.length,
-          'sha256': sha256Hex,
-          'chunkSize': 262144,
-          'chunkCount': 3,
-          'expiresInMs': 300000,
-          'sourceDeviceId': 'rift-peer',
-          'requiredCapability': 'file.transfer',
-        },
-      });
-      await Future<void>.delayed(Duration.zero);
-
-      await service.acceptFileOffer(
-        transferId: transferId,
-        destinationPath: destinationPath,
-      );
-
-      var offset = 0;
-      for (var chunkIndex = 0; chunkIndex < 3; chunkIndex += 1) {
-        final end = (offset + 262144 < bytes.length)
-            ? offset + 262144
-            : bytes.length;
-        final chunkBytes = bytes.sublist(offset, end);
-        final chunkSha256 = sha256.convert(chunkBytes).toString();
         transport.simulateIncomingMessage('rift-peer', {
           'rift': '0.1-draft',
-          'messageId':
-              '16161616-1616-4616-8616-${chunkIndex.toString().padLeft(12, '0')}',
-          'type': 'file.chunk',
+          'messageId': '15151515-1515-4515-8515-151515151515',
+          'type': 'file.offer',
           'sourceDeviceId': 'rift-peer',
           'destinationDeviceId': 'rift-local',
           'payload': {
             'transferId': transferId,
-            'chunkIndex': chunkIndex,
-            'offset': offset,
-            'byteSize': chunkBytes.length,
-            'chunkSha256': chunkSha256,
-            'contentBase64': base64.encode(chunkBytes),
-            'isLastChunk': chunkIndex == 2,
+            'fileName': 'large.txt',
+            'mediaType': 'text/plain',
+            'byteSize': bytes.length,
+            'sha256': sha256Hex,
+            'chunkSize': 262144,
+            'chunkCount': 3,
+            'expiresInMs': 300000,
+            'sourceDeviceId': 'rift-peer',
+            'requiredCapability': 'file.transfer',
           },
         });
-        offset = end;
+        await Future<void>.delayed(Duration.zero);
+
+        await service.acceptFileOffer(
+          transferId: transferId,
+          destinationPath: destinationPath,
+        );
+
+        var offset = 0;
+        for (var chunkIndex = 0; chunkIndex < 3; chunkIndex += 1) {
+          final end = (offset + 262144 < bytes.length)
+              ? offset + 262144
+              : bytes.length;
+          final chunkBytes = bytes.sublist(offset, end);
+          final chunkSha256 = sha256.convert(chunkBytes).toString();
+          transport.simulateIncomingMessage('rift-peer', {
+            'rift': '0.1-draft',
+            'messageId':
+                '16161616-1616-4616-8616-${chunkIndex.toString().padLeft(12, '0')}',
+            'type': 'file.chunk',
+            'sourceDeviceId': 'rift-peer',
+            'destinationDeviceId': 'rift-local',
+            'payload': {
+              'transferId': transferId,
+              'chunkIndex': chunkIndex,
+              'offset': offset,
+              'byteSize': chunkBytes.length,
+              'chunkSha256': chunkSha256,
+              'contentBase64': base64.encode(chunkBytes),
+              'isLastChunk': chunkIndex == 2,
+            },
+          });
+          offset = end;
+        }
+
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId': '17171717-1717-4717-8717-171717171717',
+          'type': 'file.complete',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': transferId,
+            'byteSize': bytes.length,
+            'sha256': sha256Hex,
+            'chunkCount': 3,
+          },
+        });
+
+        final completed = await completedFuture.timeout(
+          const Duration(seconds: 2),
+        );
+        expect(completed['destinationPath'], destinationPath);
+        expect(await File(destinationPath).readAsString(), content);
+      },
+    );
+
+    test('cancels trusted-session readiness on dispose', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '18181818-1818-4818-8818-181818181818',
+        messageId: '19191919-1919-4919-8919-191919191919',
+      );
+
+      await service.dispose();
+      emitTrustedSessionReady(context);
+
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'] ?? 0, 0);
+      expect(
+        controlledTransport.sentMessages.where(
+          (message) => message['type'] == 'file.resume',
+        ),
+        isEmpty,
+      );
+    });
+
+    test(
+      'dispose prevents active resume work from starting more sends',
+      () async {
+        final controlledTransport = await useControlledResumeTransport();
+        final context = await _addResumableIncomingTransfer(
+          service: service,
+          transport: controlledTransport,
+          sessionManager: sessionManager,
+          tempDir: tempDir,
+          peerDeviceId: 'rift-peer',
+          transferId: '20202020-2020-4020-8020-202020202020',
+          messageId: '21212121-2121-4121-8121-212121212121',
+        );
+        await _addResumableIncomingTransfer(
+          service: service,
+          transport: controlledTransport,
+          sessionManager: sessionManager,
+          tempDir: tempDir,
+          peerDeviceId: 'rift-peer',
+          transferId: '22222222-2222-4222-8222-222222222223',
+          messageId: '23232323-2323-4323-8323-232323232323',
+        );
+        controlledTransport.blockResume('rift-peer');
+
+        emitTrustedSessionReady(context);
+        await controlledTransport.waitForResumeCount('rift-peer', 1);
+        final resumeWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+        final disposing = service.dispose();
+        emitTrustedSessionReady(context);
+
+        expect(controlledTransport.resumeCallsByPeer['rift-peer'], 1);
+        controlledTransport.releaseResume('rift-peer');
+        await Future.wait([resumeWork, disposing]);
+
+        expect(controlledTransport.resumeCallsByPeer['rift-peer'], 1);
+      },
+    );
+
+    test('same-peer resume reconciliation is single-flight', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '24242424-2424-4424-8424-242424242424',
+        messageId: '25252525-2525-4525-8525-252525252525',
+      );
+      controlledTransport.blockResume('rift-peer');
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 1);
+      final resumeWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+      emitTrustedSessionReady(context);
+
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 1);
+      expect(controlledTransport.maxActiveResumeCallsByPeer['rift-peer'], 1);
+      controlledTransport.releaseResume('rift-peer');
+      await resumeWork;
+    });
+
+    test('different peers reconcile resumes independently', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final peerA = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer-a',
+        transferId: '26262626-2626-4626-8626-262626262626',
+        messageId: '27272727-2727-4727-8727-272727272727',
+      );
+      final peerB = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer-b',
+        transferId: '28282828-2828-4828-8828-282828282828',
+        messageId: '29292929-2929-4929-8929-292929292929',
+      );
+      controlledTransport.blockResume('rift-peer-a');
+      controlledTransport.blockResume('rift-peer-b');
+
+      emitTrustedSessionReady(peerA);
+      emitTrustedSessionReady(peerB);
+      await Future.wait([
+        controlledTransport.waitForResumeCount('rift-peer-a', 1),
+        controlledTransport.waitForResumeCount('rift-peer-b', 1),
+      ]);
+      final peerAWork = service.resumeWorkForPeerForTesting('rift-peer-a')!;
+      final peerBWork = service.resumeWorkForPeerForTesting('rift-peer-b')!;
+
+      expect(controlledTransport.activeResumeCalls, 2);
+      expect(controlledTransport.maxActiveResumeCalls, 2);
+      controlledTransport.releaseResume('rift-peer-a');
+      controlledTransport.releaseResume('rift-peer-b');
+      await Future.wait([peerAWork, peerBWork]);
+    });
+
+    test('repeated ready events coalesce into one resume rerun', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '30303030-3030-4030-8030-303030303030',
+        messageId: '31313131-3131-4131-8131-313131313131',
+      );
+      controlledTransport.blockResume('rift-peer');
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 1);
+      final resumeWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+      for (var i = 0; i < 20; i++) {
+        emitTrustedSessionReady(context);
       }
 
-      transport.simulateIncomingMessage('rift-peer', {
-        'rift': '0.1-draft',
-        'messageId': '17171717-1717-4717-8717-171717171717',
-        'type': 'file.complete',
-        'sourceDeviceId': 'rift-peer',
-        'destinationDeviceId': 'rift-local',
-        'payload': {
-          'transferId': transferId,
-          'byteSize': bytes.length,
-          'sha256': sha256Hex,
-          'chunkCount': 3,
-        },
-      });
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 1);
+      controlledTransport.releaseResume('rift-peer');
+      await resumeWork;
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 2);
+      expect(controlledTransport.maxActiveResumeCallsByPeer['rift-peer'], 1);
+    });
 
-      final completed = await completedFuture.timeout(const Duration(seconds: 2));
-      expect(completed['destinationPath'], destinationPath);
-      expect(await File(destinationPath).readAsString(), content);
+    test('ready event during a failed resume send triggers a rerun', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '36363636-3636-4636-8636-363636363636',
+        messageId: '37373737-3737-4737-8737-373737373737',
+      );
+      controlledTransport.blockResume('rift-peer');
+      controlledTransport.failNextResume('rift-peer');
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 1);
+      final resumeWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+      emitTrustedSessionReady(context);
+      controlledTransport.releaseResume('rift-peer');
+      await resumeWork;
+
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 2);
+      expect(controlledTransport.maxActiveResumeCallsByPeer['rift-peer'], 1);
+    });
+
+    test('resume failure is observed and allows a later retry', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '32323232-3232-4232-8232-323232323232',
+        messageId: '33333333-3333-4333-8333-333333333333',
+      );
+      controlledTransport.blockResume('rift-peer');
+      controlledTransport.failNextResume('rift-peer');
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 1);
+      final failedWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+      controlledTransport.releaseResume('rift-peer');
+      await failedWork;
+
+      expect(service.resumeWorkForPeerForTesting('rift-peer'), isNull);
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 2);
+      final retryWork = service.resumeWorkForPeerForTesting('rift-peer');
+      if (retryWork != null) await retryWork;
+
+      expect(service.resumeWorkForPeerForTesting('rift-peer'), isNull);
+      expect(controlledTransport.resumeCallsByPeer['rift-peer'], 2);
+      expect(controlledTransport.maxActiveResumeCallsByPeer['rift-peer'], 1);
+    });
+
+    test('dispose waits for owned resume work', () async {
+      final controlledTransport = await useControlledResumeTransport();
+      final context = await _addResumableIncomingTransfer(
+        service: service,
+        transport: controlledTransport,
+        sessionManager: sessionManager,
+        tempDir: tempDir,
+        peerDeviceId: 'rift-peer',
+        transferId: '34343434-3434-4434-8434-343434343434',
+        messageId: '35353535-3535-4535-8535-353535353535',
+      );
+      controlledTransport.blockResume('rift-peer');
+
+      emitTrustedSessionReady(context);
+      await controlledTransport.waitForResumeCount('rift-peer', 1);
+      final resumeWork = service.resumeWorkForPeerForTesting('rift-peer')!;
+      var disposalCompleted = false;
+      final disposing = service.dispose().whenComplete(() {
+        disposalCompleted = true;
+      });
+      final microtaskBarrier = Completer<void>();
+      scheduleMicrotask(microtaskBarrier.complete);
+      await microtaskBarrier.future;
+
+      expect(disposalCompleted, isFalse);
+      controlledTransport.releaseResume('rift-peer');
+      await Future.wait([resumeWork, disposing]);
+      expect(disposalCompleted, isTrue);
+    });
+
+    test('dispose is idempotent while subscriptions are active', () async {
+      await useControlledResumeTransport();
+
+      final firstDispose = service.dispose();
+      final secondDispose = service.dispose();
+
+      expect(identical(firstDispose, secondDispose), isTrue);
+      await Future.wait([firstDispose, secondDispose]);
     });
   });
 }
