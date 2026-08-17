@@ -374,27 +374,74 @@ class BenchmarkReport {
   }
 }
 
+class BenchmarkSourceMetadata {
+  const BenchmarkSourceMetadata({
+    required this.gitCommit,
+    required this.gitDirty,
+    required this.gitStatusKnown,
+  });
+
+  final String gitCommit;
+  final bool gitDirty;
+  final bool gitStatusKnown;
+
+  static BenchmarkSourceMetadata detect() {
+    try {
+      final commit = Process.runSync('git', ['rev-parse', '--verify', 'HEAD']);
+      final status = Process.runSync('git', [
+        'status',
+        '--porcelain=v1',
+        '--untracked-files=all',
+      ]);
+      if (commit.exitCode == 0 && status.exitCode == 0) {
+        return BenchmarkSourceMetadata(
+          gitCommit: (commit.stdout as String).trim(),
+          gitDirty: (status.stdout as String).trim().isNotEmpty,
+          gitStatusKnown: true,
+        );
+      }
+    } on ProcessException {
+      // Report unavailable provenance below.
+    }
+    return const BenchmarkSourceMetadata(
+      gitCommit: 'unknown',
+      gitDirty: true,
+      gitStatusKnown: false,
+    );
+  }
+}
+
 Map<String, Object> benchmarkEnvironment({
   required int warmUpIterations,
   required int iterations,
   required bool quick,
   required Iterable<String> suites,
-}) => {
-  'dartVersion': Platform.version,
-  'operatingSystem': Platform.operatingSystem,
-  'operatingSystemVersion': Platform.operatingSystemVersion,
-  'architecture': Abi.current().toString(),
-  'processorCount': Platform.numberOfProcessors,
-  'runtimeMode': const bool.fromEnvironment('dart.vm.product')
-      ? 'aot-product'
-      : 'jit',
-  'executable': Platform.executable,
-  'warmUpIterations': warmUpIterations,
-  'iterations': iterations,
-  'quick': quick,
-  'suites': suites.toList(growable: false),
-  'timestampUtc': DateTime.now().toUtc().toIso8601String(),
-};
+  BenchmarkSourceMetadata? sourceMetadata,
+  String? hostName,
+}) {
+  final source = sourceMetadata ?? BenchmarkSourceMetadata.detect();
+  final sortedSuites = suites.toList()..sort();
+  return {
+    'dartVersion': Platform.version,
+    'operatingSystem': Platform.operatingSystem,
+    'operatingSystemVersion': Platform.operatingSystemVersion,
+    'architecture': Abi.current().toString(),
+    'processorCount': Platform.numberOfProcessors,
+    'hostName': hostName ?? Platform.localHostname,
+    'runtimeMode': const bool.fromEnvironment('dart.vm.product')
+        ? 'aot-product'
+        : 'jit',
+    'executable': Platform.executable,
+    'gitCommit': source.gitCommit,
+    'gitDirty': source.gitDirty,
+    'gitStatusKnown': source.gitStatusKnown,
+    'warmUpIterations': warmUpIterations,
+    'iterations': iterations,
+    'quick': quick,
+    'suites': sortedSuites,
+    'timestampUtc': DateTime.now().toUtc().toIso8601String(),
+  };
+}
 
 class BenchmarkComparison {
   const BenchmarkComparison({required this.current, required this.baseline});
@@ -421,15 +468,63 @@ class BenchmarkComparison {
   }
 }
 
+class BenchmarkComparisonError implements Exception {
+  BenchmarkComparisonError(Iterable<String> differences)
+    : differences = List.unmodifiable(differences);
+
+  final List<String> differences;
+
+  @override
+  String toString() =>
+      'Incompatible benchmark reports:\n'
+      '${differences.map((difference) => '  - $difference').join('\n')}';
+}
+
 List<BenchmarkComparison> compareReports(
   BenchmarkReport current,
   BenchmarkReport baseline,
 ) {
+  final differences = <String>[];
+  for (final key in _comparisonEnvironmentKeys) {
+    final currentValue = current.environment[key];
+    final baselineValue = baseline.environment[key];
+    if (!_environmentValuesEqual(currentValue, baselineValue)) {
+      differences.add(
+        '$key differs '
+        '(current=${json.encode(currentValue)}, '
+        'baseline=${json.encode(baselineValue)})',
+      );
+    }
+  }
+
   final baselineByKey = {
     for (final result in baseline.results) result.key: result,
   };
-  return current.results
+  final matchingResults = current.results
       .where((result) => baselineByKey.containsKey(result.key))
+      .toList(growable: false);
+  for (final result in matchingResults) {
+    final baselineResult = baselineByKey[result.key]!;
+    if (result.operations != baselineResult.operations) {
+      differences.add(
+        '${result.benchmark}/${result.variant}/${result.payloadBytes} '
+        'operations differ '
+        '(current=${result.operations}, baseline=${baselineResult.operations})',
+      );
+    }
+    if (result.iterations != baselineResult.iterations) {
+      differences.add(
+        '${result.benchmark}/${result.variant}/${result.payloadBytes} '
+        'iterations differ '
+        '(current=${result.iterations}, baseline=${baselineResult.iterations})',
+      );
+    }
+  }
+  if (differences.isNotEmpty) {
+    throw BenchmarkComparisonError(differences);
+  }
+
+  return matchingResults
       .map(
         (result) => BenchmarkComparison(
           current: result,
@@ -437,6 +532,33 @@ List<BenchmarkComparison> compareReports(
         ),
       )
       .toList(growable: false);
+}
+
+const _comparisonEnvironmentKeys = <String>[
+  'dartVersion',
+  'operatingSystem',
+  'operatingSystemVersion',
+  'architecture',
+  'processorCount',
+  'hostName',
+  'runtimeMode',
+  'warmUpIterations',
+  'iterations',
+  'quick',
+  'suites',
+];
+
+bool _environmentValuesEqual(Object? current, Object? baseline) {
+  if (current is List && baseline is List) {
+    if (current.length != baseline.length) return false;
+    for (var index = 0; index < current.length; index++) {
+      if (!_environmentValuesEqual(current[index], baseline[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return current == baseline;
 }
 
 String formatBytes(double bytes) {

@@ -74,6 +74,9 @@ Future<void> main(List<String> arguments) async {
     } else {
       _writeHumanReport(report, comparisons);
     }
+  } on BenchmarkComparisonError catch (error) {
+    stderr.writeln(error);
+    exitCode = 65;
   } on Object catch (error, stackTrace) {
     stderr.writeln('Benchmark failed: $error');
     stderr.writeln(stackTrace);
@@ -292,7 +295,7 @@ Usage:
 
 Options:
   --json                 Write a machine-readable JSON report.
-  --compare PATH         Compare matching results with a prior JSON report.
+  --compare PATH         Compare with a compatible prior JSON report.
   --quick                Use smoke-sized workloads (one warm-up/iteration).
   --warmup N             Override warm-up iteration count (default: 2).
   --iterations N         Override measured iteration count (default: 5).
