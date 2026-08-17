@@ -1,0 +1,22 @@
+name: macOS Notification Actions
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'daemon-cs/Rift.NotificationExtractor.macOS/**'
+      - '.github/workflows/macos-notification-actions.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'daemon-cs/Rift.NotificationExtractor.macOS/**'
+      - '.github/workflows/macos-notification-actions.yml'
+
+jobs:
+  test-notification-actions:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test macOS notification action flavors
+        run: daemon-cs/Rift.NotificationExtractor.macOS/Tools/test_macos_notification_actions.sh
