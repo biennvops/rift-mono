@@ -33,6 +33,7 @@ class RiftDaemonService : Service() {
         private const val channelName = "Rift background sync"
         private const val notificationId = 4108
         private const val mirroredNotificationId = 4110
+        private const val foregroundSyncPendingIntentRequestCode = 4108
         private const val actionStart = "dev.rift.app.action.START_DAEMON_SERVICE"
         private const val actionStop = "dev.rift.app.action.STOP_DAEMON_SERVICE"
         private const val shutdownFallbackDelayMs = 5_000L
@@ -70,6 +71,7 @@ class RiftDaemonService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var runtimeGeneration = 1
     private var runtimeShutdownStarted = false
+    private var lastForegroundSyncStatus: ForegroundSyncStatus? = null
     private var stopServiceAfterShutdown = false
     private var restartAfterShutdown = false
     private var runtimeFinalizer = RuntimeShutdownFinalizer(::finalizeRuntime)
@@ -89,10 +91,17 @@ class RiftDaemonService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
+                val startingStatus = ForegroundSyncStatus(
+                    runtimeState = ForegroundSyncRuntimeState.STARTING,
+                    trustedPeerCount = 0,
+                    connectedPeerCount = 0,
+                    connectedPeerNames = emptyList(),
+                )
+                lastForegroundSyncStatus = startingStatus
                 ServiceCompat.startForeground(
                     this,
                     notificationId,
-                    buildNotification(),
+                    buildForegroundNotification(startingStatus),
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
                     } else {
@@ -339,6 +348,18 @@ class RiftDaemonService : Service() {
     ) {
         when (method) {
             "getDeviceStatus" -> result.success(AndroidDeviceStatus.asMap(this))
+            "updateForegroundSyncStatus" -> {
+                val status = ForegroundSyncStatusParser.parse(arguments)
+                if (status == null) {
+                    result.error(
+                        "invalid_args",
+                        "Invalid foreground sync status",
+                        null,
+                    )
+                } else {
+                    result.success(updateForegroundNotification(status))
+                }
+            }
             "showNotification" -> {
                 result.success(showActivityNotification(arguments))
             }
@@ -521,25 +542,68 @@ class RiftDaemonService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification {
+    private fun updateForegroundNotification(status: ForegroundSyncStatus): Boolean {
+        if (lastForegroundSyncStatus == status) {
+            return true
+        }
+
+        return try {
+            NotificationManagerCompat.from(this).notify(
+                notificationId,
+                buildForegroundNotification(status),
+            )
+            lastForegroundSyncStatus = status
+            true
+        } catch (error: SecurityException) {
+            Log.w(logTag, "Foreground notification update was denied", error)
+            false
+        }
+    }
+
+    private fun buildForegroundNotification(status: ForegroundSyncStatus): Notification {
+        val copy = status.notificationCopy()
         val launchIntent = Intent(this, MainActivity::class.java).apply {
+            data = Uri.parse("rift://foreground-sync")
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("rift.notification.route", "devices")
         }
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            foregroundSyncPendingIntentRequestCode,
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        return NotificationCompat.Builder(this, channelId)
+        val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Rift background sync active")
-            .setContentText("Keeping trusted peer sync available while the app is in the background")
+            .setContentTitle(copy.title)
+            .setContentText(copy.body)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setShowWhen(false)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(buildPublicForegroundNotification())
             .setContentIntent(pendingIntent)
-            .build()
+
+        if (copy.expandedLines.isEmpty()) {
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(copy.body))
+        } else {
+            val style = NotificationCompat.InboxStyle()
+            copy.expandedLines.forEach(style::addLine)
+            builder.setStyle(style)
+        }
+        return builder.build()
     }
+
+    private fun buildPublicForegroundNotification(): Notification =
+        NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Rift")
+            .setContentText("Background sync active")
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setShowWhen(false)
+            .build()
 }
