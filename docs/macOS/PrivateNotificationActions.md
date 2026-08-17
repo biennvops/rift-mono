@@ -4,7 +4,11 @@ macOS notification dismissal remains experimental. The Accessibility implementat
 
 The private-framework experiment remains unavailable. It identified the internal removal identity but did not provide an entitlement-feasible way for Rift to resolve or mutate the live object.
 
-## Final backend decision
+## Scope of this PR
+
+This PR is explicitly experimental/research infrastructure. It adds a gated Accessibility backend, native request-safety tests, build-flavor isolation, and CI coverage for local validation; it does not claim completion or release support for macOS notification dismissal. The normal Rift build remains action-free, and the optional Accessibility flavor remains development/validation-only until the installed-extractor Phase G matrix is completed.
+
+## Experimental backend decision
 
 | Backend | Exact identity | Remove one | Verify target and siblings | Permission or entitlement | Final result |
 |---|---:|---:|---:|---|---|

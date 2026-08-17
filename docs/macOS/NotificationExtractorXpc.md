@@ -50,7 +50,7 @@ The broker handles these operations in-process:
 
 Capability and dismissal requests require non-empty `notificationId` and `packageName` strings no longer than 512 characters. The surface returns JSON values only; it exposes no Objective-C object, AX handle, selector, arbitrary XPC target, or generic method invocation.
 
-A default build contains a none backend and reports `notCompiled`. The optional Accessibility build and development-only private build are separate, mutually exclusive flavors. Their exact build gates and safety behavior are documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md).
+A default build contains a none backend and reports `notCompiled`. The optional Accessibility build and development-only private build are separate, mutually exclusive experimental/research infrastructure flavors in this PR, not release capabilities. Their exact build gates and safety behavior are documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md).
 
 Accessibility operations stay in the FDA-bearing extractor process because that process owns the stable notification database identity and native UI lookup. The network-facing daemon receives no Accessibility handle and cannot submit peer-provided visible content as a query. The daemon first resolves the remote notification ID to its locally retained `NotificationSyncRecord`, then sends the record's ID and package name over authenticated XPC.
 

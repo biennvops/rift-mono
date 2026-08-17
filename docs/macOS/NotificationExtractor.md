@@ -30,7 +30,7 @@ From the repository root:
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
 
-Default builds compile no notification-action backend. The separate optional Accessibility flavor and the development-only private-framework flavor are documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md). Both require explicit build switches; neither is silently enabled.
+Default builds compile no notification-action backend. The separate optional Accessibility flavor and the development-only private-framework flavor are experimental/research infrastructure in this PR, documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md). Both require explicit build switches; neither is silently enabled or a release capability.
 
 The script defaults to the current architecture and creates:
 
