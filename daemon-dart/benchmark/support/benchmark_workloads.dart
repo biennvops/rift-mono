@@ -867,7 +867,7 @@ class RiftBenchmarkWorkloads {
             operations: operations,
             throughputBytes: payload.length * operations,
             wireBytes: (payload.length + 4) * operations,
-            metrics: {'logEvents': operations * 2},
+            metrics: {'logEvents': 0},
           );
         },
       );

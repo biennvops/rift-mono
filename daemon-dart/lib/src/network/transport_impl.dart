@@ -447,10 +447,6 @@ class TransportImpl
       throw StateError('Peer $deviceId is not connected');
     }
     final writeGate = _peerWriteGates.putIfAbsent(deviceId, PeerWriteGate.new);
-    RiftLog.info(
-      '[TLS] transport.sendMessage peerDeviceId=$deviceId '
-      'bytes=${message.length} remote=${socket.remoteAddress.address}:${socket.remotePort}',
-    );
 
     // Validate outbound payload once, then frame the original bytes without re-encoding.
     try {
@@ -478,9 +474,6 @@ class TransportImpl
         }
 
         await _frameWriter(currentSocket, frame);
-        RiftLog.info(
-          '[TLS] transport.sendMessage flushed peerDeviceId=$deviceId',
-        );
       });
     } on SocketException {
       disconnectConnection(deviceId, socket);
