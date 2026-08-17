@@ -146,6 +146,43 @@ internal class MediaSnapshotTracker(
     }
 }
 
+internal enum class MissingSessionDecision {
+    NewlyMissing,
+    Deferred,
+    Remove,
+}
+
+internal class MissingSessionTracker(
+    private val graceMs: Long,
+) {
+    private val missingSinceById = HashMap<String, Long>()
+
+    fun markPresent(playbackId: String) {
+        missingSinceById.remove(playbackId)
+    }
+
+    fun markMissing(playbackId: String, nowMs: Long): MissingSessionDecision {
+        val missingSince = missingSinceById[playbackId]
+        if (missingSince == null) {
+            missingSinceById[playbackId] = nowMs
+            return MissingSessionDecision.NewlyMissing
+        }
+        if (nowMs - missingSince < graceMs) {
+            return MissingSessionDecision.Deferred
+        }
+        missingSinceById.remove(playbackId)
+        return MissingSessionDecision.Remove
+    }
+
+    fun remove(playbackId: String) {
+        missingSinceById.remove(playbackId)
+    }
+
+    fun clear() {
+        missingSinceById.clear()
+    }
+}
+
 internal class MediaAppLabelCache(
     private val resolver: (String) -> String,
     private val stats: MutableMediaObserverStats,
