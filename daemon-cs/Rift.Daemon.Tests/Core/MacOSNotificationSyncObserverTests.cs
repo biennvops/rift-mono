@@ -114,6 +114,32 @@ public sealed class MacOSNotificationSyncObserverTests
         Assert.All(syncService.Events, evt => Assert.False(evt.Notification.IsOpenable));
     }
 
+    [Fact]
+    public async Task RefreshActionCapabilitiesAsync_DropsOldNonDismissibleRecordsFromUpgradeTracking()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var extractorClient = new StubExtractorClient();
+        var observer = CreateObserver(syncService, extractorClient);
+        var start = DateTimeOffset.Parse("2026-07-20T00:00:00Z");
+        var notifications = Enumerable.Range(0, 65)
+            .Select(index => CreateNotification(
+                $"notification-{index}",
+                $"Title {index}",
+                postedAt: start.AddSeconds(index).ToString("O")))
+            .ToArray();
+
+        await observer.ProcessIncrementalAsync(notifications, CancellationToken.None);
+        extractorClient.CapabilityNotificationIds.Clear();
+
+        await observer.RefreshActionCapabilitiesAsync(CancellationToken.None);
+
+        Assert.Equal(64, extractorClient.CapabilityNotificationIds.Count);
+        Assert.DoesNotContain("notification-0", extractorClient.CapabilityNotificationIds);
+        Assert.Equal(
+            Enumerable.Range(1, 64).Reverse().Select(index => $"notification-{index}"),
+            extractorClient.CapabilityNotificationIds);
+    }
+
     [Theory]
     [InlineData("dev.rift.app")]
     [InlineData("com.rift.app")]
@@ -142,14 +168,15 @@ public sealed class MacOSNotificationSyncObserverTests
     private static MacOSExtractedNotification CreateNotification(
         string id,
         string title,
-        string packageName = "com.example.app") => new()
+        string packageName = "com.example.app",
+        string postedAt = "2026-07-20T00:00:00.0000000+00:00") => new()
         {
             NotificationId = id,
             PackageName = packageName,
             AppName = "Example",
             Title = title,
             BodyPreview = "Preview",
-            PostedAt = "2026-07-20T00:00:00.0000000+00:00",
+            PostedAt = postedAt,
             IsDismissible = true,
             IsOpenable = true
         };

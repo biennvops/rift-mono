@@ -15,6 +15,7 @@ internal sealed class MacOSNotificationSyncObserver(
 
     private readonly Dictionary<string, string> _fingerprints = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MacOSExtractedNotification> _trackedNotifications = new(StringComparer.Ordinal);
+    private readonly SortedSet<TrackedNotificationKey> _nonDismissibleNotifications = new(TrackedNotificationKeyComparer.Instance);
     private long _cursor;
     private bool _cursorInitialized;
 
@@ -129,13 +130,13 @@ internal sealed class MacOSNotificationSyncObserver(
             if (_fingerprints.TryGetValue(actionableNotification.NotificationId, out var previousFingerprint) &&
                 string.Equals(previousFingerprint, fingerprint, StringComparison.Ordinal))
             {
-                _trackedNotifications[actionableNotification.NotificationId] = actionableNotification;
+                TrackNotification(actionableNotification);
                 continue;
             }
 
             var result = await PublishAsync(eventType, actionableNotification, removedAt: null, cancellationToken).ConfigureAwait(false);
             _fingerprints[actionableNotification.NotificationId] = fingerprint;
-            _trackedNotifications[actionableNotification.NotificationId] = actionableNotification;
+            TrackNotification(actionableNotification);
             logger.LogInformation(
                 "macOS notification {EventType} processed (suppressed={Suppressed}, broadcastPeers={BroadcastPeerCount}).",
                 eventType,
@@ -149,10 +150,10 @@ internal sealed class MacOSNotificationSyncObserver(
         var currentlyDismissible = _trackedNotifications.Values
             .Where(notification => notification.IsDismissible)
             .ToArray();
-        var upgradeCandidates = _trackedNotifications.Values
-            .Where(notification => !notification.IsDismissible)
-            .OrderByDescending(notification => notification.PostedAt, StringComparer.Ordinal)
+        var upgradeCandidates = _nonDismissibleNotifications
+            .Reverse()
             .Take(MaximumCapabilityUpgradesPerPoll)
+            .Select(key => _trackedNotifications[key.NotificationId])
             .ToArray();
 
         foreach (var notification in currentlyDismissible.Concat(upgradeCandidates))
@@ -166,13 +167,45 @@ internal sealed class MacOSNotificationSyncObserver(
             }
 
             await PublishAsync("updated", updated, removedAt: null, cancellationToken).ConfigureAwait(false);
-            _trackedNotifications[updated.NotificationId] = updated;
+            TrackNotification(updated);
             _fingerprints[updated.NotificationId] = CreateFingerprint(updated);
             logger.LogInformation(
                 "macOS notification action capability changed (dismissible={IsDismissible}).",
                 updated.IsDismissible);
         }
     }
+
+    private void TrackNotification(MacOSExtractedNotification notification)
+    {
+        if (_trackedNotifications.TryGetValue(notification.NotificationId, out var previous) &&
+            !previous.IsDismissible)
+        {
+            _nonDismissibleNotifications.Remove(CreateTrackingKey(previous));
+        }
+
+        _trackedNotifications[notification.NotificationId] = notification;
+        if (notification.IsDismissible)
+        {
+            return;
+        }
+
+        _nonDismissibleNotifications.Add(CreateTrackingKey(notification));
+        while (_nonDismissibleNotifications.Count > MaximumCapabilityUpgradesPerPoll)
+        {
+            var oldest = _nonDismissibleNotifications.Min;
+            _nonDismissibleNotifications.Remove(oldest);
+
+            if (_trackedNotifications.TryGetValue(oldest.NotificationId, out var tracked) &&
+                !tracked.IsDismissible &&
+                string.Equals(tracked.PostedAt, oldest.PostedAt, StringComparison.Ordinal))
+            {
+                _trackedNotifications.Remove(oldest.NotificationId);
+            }
+        }
+    }
+
+    private static TrackedNotificationKey CreateTrackingKey(MacOSExtractedNotification notification) =>
+        new(notification.NotificationId, notification.PostedAt);
 
     private async Task<MacOSExtractedNotification> ResolveActionCapabilitiesAsync(
         MacOSExtractedNotification notification,
@@ -263,4 +296,19 @@ internal sealed class MacOSNotificationSyncObserver(
         "unsupportedSchema" => "The macOS Notification Center schema is not supported.",
         _ => "Rift Notification Extractor is not ready."
     };
+
+    private readonly record struct TrackedNotificationKey(string NotificationId, string PostedAt);
+
+    private sealed class TrackedNotificationKeyComparer : IComparer<TrackedNotificationKey>
+    {
+        internal static TrackedNotificationKeyComparer Instance { get; } = new();
+
+        public int Compare(TrackedNotificationKey left, TrackedNotificationKey right)
+        {
+            var postedAtComparison = StringComparer.Ordinal.Compare(left.PostedAt, right.PostedAt);
+            return postedAtComparison != 0
+                ? postedAtComparison
+                : StringComparer.Ordinal.Compare(left.NotificationId, right.NotificationId);
+        }
+    }
 }
