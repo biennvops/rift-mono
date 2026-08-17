@@ -6,6 +6,12 @@ private let maximumResponseBytes = 1024 * 1024
 private let maximumErrorBytes = 1024 * 1024
 private let workerTimeout = DispatchTimeInterval.seconds(10)
 private let readChunkBytes = 16 * 1024
+private let maximumNotificationActionFieldCharacters = 512
+private let nativeNotificationActionOperations = [
+    "getNotificationActionBackendStatus",
+    "getNotificationActionCapabilities",
+    "dismissNotification"
+]
 
 private enum WorkerStream {
     case standardOutput
@@ -47,14 +53,70 @@ private final class WorkerOutput: @unchecked Sendable {
 }
 
 private final class ExtractorService: NSObject, RiftNotificationExtractorXpcProtocol {
+    private let notificationActionBackend = makeMacOSNotificationActionBackend()
+
     func request(_ request: Data, withReply reply: @escaping (Data) -> Void) {
         guard request.count <= maximumRequestBytes else {
             reply(errorResponse(for: request, code: "requestTooLarge", message: "Extractor requests must not exceed 64 KiB."))
             return
         }
 
+        if let response = handleNotificationActionRequest(request) {
+            reply(response)
+            return
+        }
+
         DispatchQueue.global(qos: .userInitiated).async {
             reply(self.runWorker(request: request))
+        }
+    }
+
+    private func handleNotificationActionRequest(_ request: Data) -> Data? {
+        guard
+            let object = try? JSONSerialization.jsonObject(with: request) as? [String: Any],
+            let operation = object["operation"] as? String,
+            nativeNotificationActionOperations.contains(operation)
+        else {
+            return nil
+        }
+
+        switch operation {
+        case "getNotificationActionBackendStatus":
+            return successResponse(
+                for: request,
+                result: notificationActionBackend.status().jsonObject)
+        case "getNotificationActionCapabilities":
+            guard
+                let notificationId = boundedActionField("notificationId", in: object),
+                let packageName = boundedActionField("packageName", in: object)
+            else {
+                return errorResponse(
+                    for: request,
+                    code: "invalidRequest",
+                    message: "notificationId and packageName must be non-empty strings no longer than 512 characters.")
+            }
+            return successResponse(
+                for: request,
+                result: notificationActionBackend.capabilities(
+                    notificationId: notificationId,
+                    packageName: packageName).jsonObject)
+        case "dismissNotification":
+            guard
+                let notificationId = boundedActionField("notificationId", in: object),
+                let packageName = boundedActionField("packageName", in: object)
+            else {
+                return errorResponse(
+                    for: request,
+                    code: "invalidRequest",
+                    message: "notificationId and packageName must be non-empty strings no longer than 512 characters.")
+            }
+            return successResponse(
+                for: request,
+                result: notificationActionBackend.dismiss(
+                    notificationId: notificationId,
+                    packageName: packageName).jsonObject)
+        default:
+            return nil
         }
     }
 
@@ -199,6 +261,35 @@ private func requestId(from request: Data) -> String {
         return ""
     }
     return requestId
+}
+
+private func boundedActionField(_ name: String, in object: [String: Any]) -> String? {
+    guard
+        let value = object[name] as? String,
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        value.count <= maximumNotificationActionFieldCharacters
+    else {
+        return nil
+    }
+    return value
+}
+
+private func successResponse(for request: Data, result: [String: Any]) -> Data {
+    let response: [String: Any] = [
+        "id": requestId(from: request),
+        "ok": true,
+        "result": result
+    ]
+    guard
+        let data = try? JSONSerialization.data(withJSONObject: response),
+        data.count <= maximumResponseBytes
+    else {
+        return errorResponse(
+            for: request,
+            code: "invalidResponse",
+            message: "The native notification action backend returned an invalid response.")
+    }
+    return data
 }
 
 private func errorResponse(for request: Data, code: String, message: String) -> Data {
