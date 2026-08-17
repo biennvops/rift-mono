@@ -145,7 +145,7 @@ def validate_semantic_output(
         if status == "FAIL":
             _validate_two_sided_failure(set(evidence_refs), task, packet)
         for left, right in contradiction_sides:
-            _validate_contradiction_origins(left, right, packet)
+            _validate_contradiction_sides(left, right, task, packet)
     if payload["contradictions"] and status != "FAIL":
         raise SemanticOutputError(
             "confirmed contradictions require FAIL status",
@@ -195,26 +195,18 @@ def _validate_two_sided_failure(
     packet: EvidencePacket,
 ) -> None:
     by_id = {item.evidence_id: item for item in packet.all_evidence}
-    source_domains = _domain_values(task.metadata.get("source_domain"))
-    target_domains = _domain_values(task.metadata.get("target_domain"))
-    source_entities = _string_values([task.metadata.get("source_entity_id")])
-    target_entities = _string_values(task.metadata.get("target_entity_ids", []))
+    side_refs = _expected_side_refs(evidence_refs, task, by_id)
 
-    if (source_domains or source_entities) and (target_domains or target_entities):
-        source_refs = {
-            value
-            for value in evidence_refs
-            if _matches_side(by_id[value], source_domains, source_entities)
-        }
-        target_refs = {
-            value
-            for value in evidence_refs
-            if _matches_side(by_id[value], target_domains, target_entities)
-        }
+    if side_refs is not None:
+        source_refs, target_refs = side_refs
         if any(source != target for source in source_refs for target in target_refs):
             return
     else:
-        origins = {_primary_origin(by_id[value]) for value in evidence_refs}
+        origins = {
+            _primary_origin(by_id[value])
+            for value in evidence_refs
+            if by_id[value].kind != "contract_requirement"
+        }
         if len(origins) >= 2:
             return
 
@@ -224,14 +216,41 @@ def _validate_two_sided_failure(
     )
 
 
+def _expected_side_refs(
+    evidence_refs: set[str],
+    task: SemanticReviewTask,
+    by_id: Mapping[str, Any],
+) -> tuple[set[str], set[str]] | None:
+    source_domains = _domain_values(task.metadata.get("source_domain"))
+    target_domains = _domain_values(task.metadata.get("target_domain"))
+    source_entities = _string_values([task.metadata.get("source_entity_id")])
+    target_entities = _string_values(task.metadata.get("target_entity_ids", []))
+    if not (source_domains or source_entities) or not (target_domains or target_entities):
+        return None
+
+    source_refs = {
+        value
+        for value in evidence_refs
+        if _matches_side(by_id[value], source_domains, source_entities)
+    }
+    target_refs = {
+        value
+        for value in evidence_refs
+        if _matches_side(by_id[value], target_domains, target_entities)
+    }
+    return source_refs, target_refs
+
+
 def _matches_side(
     evidence: Any,
     domains: set[str],
     entity_ids: set[str],
 ) -> bool:
+    if evidence.kind == "contract_requirement":
+        return False
     entity_id = str(evidence.metadata.get("entity_id") or "")
-    if entity_id and entity_id in entity_ids:
-        return True
+    if entity_ids:
+        return entity_id in entity_ids
     report = _normalize_domain(evidence.report)
     if report and report in domains:
         return True
@@ -269,12 +288,24 @@ def _normalize_domain(value: Any) -> str:
     return "".join(character for character in str(value or "").casefold() if character.isalnum())
 
 
-def _validate_contradiction_origins(
+def _validate_contradiction_sides(
     left: set[str],
     right: set[str],
+    task: SemanticReviewTask,
     packet: EvidencePacket,
 ) -> None:
     by_id = {item.evidence_id: item for item in packet.all_evidence}
+    left_sides = _expected_side_refs(left, task, by_id)
+    right_sides = _expected_side_refs(right, task, by_id)
+    if left_sides is not None and right_sides is not None:
+        left_source, left_target = left_sides
+        right_source, right_target = right_sides
+        if (left_source and right_target) or (left_target and right_source):
+            return
+        raise SemanticOutputError(
+            "contradiction must cite evidence from opposing source and target sides",
+            category="CONTRADICTION_CITATION_INVALID",
+        )
 
     def origins(values: set[str]) -> set[tuple[Any, ...]]:
         return {
@@ -285,7 +316,7 @@ def _validate_contradiction_origins(
                 by_id[value].kind,
             )
             for value in values
-            if value in by_id
+            if value in by_id and by_id[value].kind != "contract_requirement"
         }
 
     left_origins = origins(left)

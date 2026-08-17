@@ -283,6 +283,63 @@ def test_two_sided_failure_requires_source_and_target_evidence() -> None:
     assert result.status == "FAIL"
 
 
+def test_two_sided_failure_rejects_contract_as_source_entity_evidence() -> None:
+    task = _task(
+        task_type=SemanticTaskType.REQUIREMENT_TEST_ALIGNMENT,
+        two_sided=True,
+    )
+    packet = _packet(task)
+
+    with pytest.raises(SemanticOutputError) as error:
+        validate_semantic_output(
+            _response("FAIL", evidence_refs=["contract-1", "doc-right"]),
+            task,
+            packet,
+        )
+
+    assert error.value.category == "TWO_SIDED_CITATION_INVALID"
+
+
+def test_two_sided_contradiction_requires_opposing_side_evidence() -> None:
+    task = _task(
+        task_type=SemanticTaskType.CROSS_DOCUMENT_CONSISTENCY,
+        two_sided=True,
+    )
+    packet = _packet(task)
+    packet.cross_document_evidence.append(
+        SemanticEvidence(
+            "doc-left-2",
+            "trace_excerpt",
+            "FE-03 also requires retrying notification forwarding.",
+            3,
+            report="report3",
+            section_path="3.3 Notification Retry",
+            source_path="report3.docx",
+            source_location={"display": "paragraph 18"},
+            metadata={"entity_id": "requirement:FE-03"},
+        )
+    )
+
+    with pytest.raises(SemanticOutputError) as error:
+        validate_semantic_output(
+            _response(
+                "FAIL",
+                evidence_refs=["doc-left", "doc-right"],
+                contradictions=[
+                    {
+                        "summary": "The source statements require different retry behavior.",
+                        "left_evidence_refs": ["doc-left"],
+                        "right_evidence_refs": ["doc-left-2"],
+                    }
+                ],
+            ),
+            task,
+            packet,
+        )
+
+    assert error.value.category == "CONTRADICTION_CITATION_INVALID"
+
+
 def test_required_secret_or_budget_gap_returns_review_without_provider_call() -> None:
     packet = _packet()
     packet.excluded_evidence = [
