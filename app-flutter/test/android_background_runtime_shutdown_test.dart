@@ -94,6 +94,7 @@ void main() {
         deviceStatusDisposeCalls += 1;
         order.add('device-status');
       },
+      disposeForegroundSyncStatus: () {},
       disposeClient: () {
         clientDisposeCalls += 1;
         order.add('client');
@@ -139,6 +140,7 @@ void main() {
       stopEventProducers: () {},
       disposeRemoteMedia: () {},
       disposeDeviceStatusPublisher: () {},
+      disposeForegroundSyncStatus: () {},
       disposeClient: () {
         clientDisposeCalls += 1;
       },
@@ -163,6 +165,7 @@ void main() {
       stopEventProducers: () {},
       disposeRemoteMedia: () => throw StateError('media dispose failed'),
       disposeDeviceStatusPublisher: () {},
+      disposeForegroundSyncStatus: () {},
       disposeClient: () {
         clientDisposeCalls += 1;
       },
@@ -241,6 +244,7 @@ void main() {
           deviceStatusDisposeStarted.complete();
           await deviceStatus.dispose();
         },
+        disposeForegroundSyncStatus: () {},
         disposeClient: client.dispose,
         drainOwnedWork: () {},
       );

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
 
+import '../device_status/android_foreground_sync_status_controller.dart';
 import '../device_status/device_status_publisher.dart';
 import '../media_playback/android_remote_media_playback_coordinator.dart';
 import '../notification_sync_policy.dart';
@@ -38,12 +39,14 @@ class AndroidBackgroundRuntimeShutdown {
     required FutureOr<void> Function() stopEventProducers,
     required FutureOr<void> Function() disposeRemoteMedia,
     required FutureOr<void> Function() disposeDeviceStatusPublisher,
+    required FutureOr<void> Function() disposeForegroundSyncStatus,
     required FutureOr<void> Function() disposeClient,
     required FutureOr<void> Function() drainOwnedWork,
     void Function(String message)? logger,
   })  : _stopEventProducers = stopEventProducers,
         _disposeRemoteMedia = disposeRemoteMedia,
         _disposeDeviceStatusPublisher = disposeDeviceStatusPublisher,
+        _disposeForegroundSyncStatus = disposeForegroundSyncStatus,
         _disposeClient = disposeClient,
         _drainOwnedWork = drainOwnedWork,
         _logger = logger;
@@ -51,6 +54,7 @@ class AndroidBackgroundRuntimeShutdown {
   final FutureOr<void> Function() _stopEventProducers;
   final FutureOr<void> Function() _disposeRemoteMedia;
   final FutureOr<void> Function() _disposeDeviceStatusPublisher;
+  final FutureOr<void> Function() _disposeForegroundSyncStatus;
   final FutureOr<void> Function() _disposeClient;
   final FutureOr<void> Function() _drainOwnedWork;
   final void Function(String message)? _logger;
@@ -70,9 +74,14 @@ class AndroidBackgroundRuntimeShutdown {
     final remoteMediaDispose = _runStep('remote media', _disposeRemoteMedia);
     final deviceStatusDispose =
         _runStep('device status', _disposeDeviceStatusPublisher);
+    final foregroundSyncStatusDispose = _runStep(
+      'foreground sync status',
+      _disposeForegroundSyncStatus,
+    );
     await _runStep('JSON-RPC client', _disposeClient);
     await remoteMediaDispose;
     await deviceStatusDispose;
+    await foregroundSyncStatusDispose;
     await _runStep('owned async work', _drainOwnedWork);
     _logger?.call('Dart runtime shutdown complete');
   }
@@ -101,6 +110,8 @@ Future<void> runAndroidBackgroundMain() async {
   final ownedSubscriptions = <StreamSubscription<dynamic>>[];
   DeviceStatusPublisher? deviceStatusPublisher;
   Future<void>? deviceStatusPublisherStart;
+  AndroidForegroundSyncStatusController? foregroundSyncStatusController;
+  Future<void>? foregroundSyncStatusControllerStart;
   AndroidRemoteMediaPlaybackCoordinator? remoteMedia;
   Future<void>? remoteMediaStart;
   Future<void>? nativeEventQueueDispose;
@@ -238,6 +249,11 @@ Future<void> runAndroidBackgroundMain() async {
       deviceStatusPublisher = null;
       await owner?.dispose();
     },
+    disposeForegroundSyncStatus: () async {
+      final owner = foregroundSyncStatusController;
+      foregroundSyncStatusController = null;
+      await owner?.dispose();
+    },
     disposeClient: client.dispose,
     drainOwnedWork: () async {
       try {
@@ -245,13 +261,18 @@ Future<void> runAndroidBackgroundMain() async {
       } catch (_) {}
       final remoteStart = remoteMediaStart;
       final deviceStatusStart = deviceStatusPublisherStart;
+      final foregroundSyncStatusStart = foregroundSyncStatusControllerStart;
       remoteMediaStart = null;
       deviceStatusPublisherStart = null;
+      foregroundSyncStatusControllerStart = null;
       try {
         await remoteStart;
       } catch (_) {}
       try {
         await deviceStatusStart;
+      } catch (_) {}
+      try {
+        await foregroundSyncStatusStart;
       } catch (_) {}
       try {
         await mirroredNotificationLifecycleQueue;
@@ -463,6 +484,32 @@ Future<void> runAndroidBackgroundMain() async {
       }
     }),
   );
+
+  foregroundSyncStatusController = AndroidForegroundSyncStatusController(
+    listTrustedPeers: () async {
+      final response = await client.listTrustedPeers();
+      if (response is! Map) {
+        throw const FormatException('Invalid trusted peer response');
+      }
+      return Map<String, dynamic>.from(response);
+    },
+    publishForegroundSyncStatus: (status) {
+      return AndroidShell.updateForegroundSyncStatus(
+        runtimeState: status.runtimeState.name,
+        trustedPeerCount: status.trustedPeerCount,
+        connectedPeerCount: status.connectedPeerCount,
+        connectedPeerNames: status.connectedPeerNames,
+      );
+    },
+    onTrustChanged: client.onTrustChanged,
+    onPeerDiscovered: client.onPeerDiscovered,
+    onPeerLost: client.onPeerLost,
+    onDeviceStatusUpdated: client.onDeviceStatusUpdated,
+    onConnectionChanged: client.onConnectionChanged,
+    logger: (message) => debugPrint('[Android Foreground Sync] $message'),
+  );
+  foregroundSyncStatusControllerStart = foregroundSyncStatusController!.start();
+  unawaited(foregroundSyncStatusControllerStart);
 
   deviceStatusPublisher = DeviceStatusPublisher(client);
   deviceStatusPublisherStart = deviceStatusPublisher!.start();

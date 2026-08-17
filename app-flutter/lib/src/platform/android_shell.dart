@@ -34,6 +34,27 @@ class AndroidShell {
     return result ?? false;
   }
 
+  static Future<bool> updateForegroundSyncStatus({
+    required String runtimeState,
+    required int trustedPeerCount,
+    required int connectedPeerCount,
+    required List<String> connectedPeerNames,
+  }) async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>(
+      'updateForegroundSyncStatus',
+      {
+        'runtimeState': runtimeState,
+        'trustedPeerCount': trustedPeerCount,
+        'connectedPeerCount': connectedPeerCount,
+        'connectedPeerNames': connectedPeerNames,
+      },
+    );
+    return result ?? false;
+  }
+
   static Future<bool> clearNotification(String notificationKey) async {
     if (!isSupported) {
       return false;
