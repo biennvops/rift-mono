@@ -9,6 +9,10 @@ build_script="$project_dir/Tools/build_macos_notification_extractor_app.sh"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rift-notification-action-tests.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
+contains_string() {
+  /usr/bin/strings "$1" | /usr/bin/grep -F -- "$2" >/dev/null
+}
+
 broker_sources=(
   "$native_dir/XpcProtocol.swift"
   "$native_dir/PrivateNotificationActions.swift"
@@ -24,11 +28,11 @@ test_sources=(
 )
 
 xcrun swiftc "${broker_sources[@]}" -framework Foundation -o "$temp_dir/broker-normal"
-if /usr/bin/strings "$temp_dir/broker-normal" | rg -q 'RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1'; then
+if contains_string "$temp_dir/broker-normal" 'RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1'; then
   printf 'normal broker contains the private notification-action sentinel\n' >&2
   exit 1
 fi
-if /usr/bin/strings "$temp_dir/broker-normal" | rg -q 'RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS_V1'; then
+if contains_string "$temp_dir/broker-normal" 'RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS_V1'; then
   printf 'normal broker contains the Accessibility notification-action sentinel\n' >&2
   exit 1
 fi
@@ -39,11 +43,11 @@ xcrun swiftc \
   "${broker_sources[@]}" \
   -framework Foundation \
   -o "$temp_dir/broker-private"
-if ! /usr/bin/strings "$temp_dir/broker-private" | rg -q 'RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1'; then
+if ! contains_string "$temp_dir/broker-private" 'RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1'; then
   printf 'private broker is missing the private notification-action sentinel\n' >&2
   exit 1
 fi
-if /usr/bin/strings "$temp_dir/broker-private" | rg -q 'RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS_V1'; then
+if contains_string "$temp_dir/broker-private" 'RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS_V1'; then
   printf 'private broker contains the Accessibility notification-action sentinel\n' >&2
   exit 1
 fi
@@ -55,11 +59,11 @@ xcrun swiftc \
   -framework ApplicationServices \
   -framework AppKit \
   -o "$temp_dir/broker-accessibility"
-if ! /usr/bin/strings "$temp_dir/broker-accessibility" | rg -q 'RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS_V1'; then
+if ! contains_string "$temp_dir/broker-accessibility" 'RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS_V1'; then
   printf 'Accessibility broker is missing its notification-action sentinel\n' >&2
   exit 1
 fi
-if /usr/bin/strings "$temp_dir/broker-accessibility" | rg -q 'RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1'; then
+if contains_string "$temp_dir/broker-accessibility" 'RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1'; then
   printf 'Accessibility broker contains the private notification-action sentinel\n' >&2
   exit 1
 fi
@@ -97,7 +101,7 @@ if RIFT_DEV_PRIVATE_MACOS_NOTIFICATION_ACTIONS=invalid "$build_script" >"$invali
   printf 'invalid private notification-action build flag succeeded\n' >&2
   exit 1
 fi
-if ! rg -q 'must be 0 or 1' "$invalid_output"; then
+if ! /usr/bin/grep -Fq -- 'must be 0 or 1' "$invalid_output"; then
   printf 'invalid private notification-action build flag returned the wrong error\n' >&2
   exit 1
 fi
@@ -107,7 +111,7 @@ if RIFT_MACOS_ACCESSIBILITY_NOTIFICATION_ACTIONS=invalid "$build_script" >"$inva
   printf 'invalid Accessibility notification-action build flag succeeded\n' >&2
   exit 1
 fi
-if ! rg -q 'must be 0 or 1' "$invalid_accessibility_output"; then
+if ! /usr/bin/grep -Fq -- 'must be 0 or 1' "$invalid_accessibility_output"; then
   printf 'invalid Accessibility notification-action build flag returned the wrong error\n' >&2
   exit 1
 fi
@@ -119,7 +123,7 @@ if RIFT_DEV_PRIVATE_MACOS_NOTIFICATION_ACTIONS=1 \
   printf 'mutually exclusive notification-action build flags succeeded\n' >&2
   exit 1
 fi
-if ! rg -q 'mutually exclusive' "$combined_output"; then
+if ! /usr/bin/grep -Fq -- 'mutually exclusive' "$combined_output"; then
   printf 'combined notification-action build flags returned the wrong error\n' >&2
   exit 1
 fi
