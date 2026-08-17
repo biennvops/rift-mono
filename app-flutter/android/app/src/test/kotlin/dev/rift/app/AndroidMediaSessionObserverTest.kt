@@ -117,13 +117,101 @@ class AndroidMediaSessionObserverTest {
 
     @Test
     fun changedBitmapGenerationChangesSemanticArtworkIdentity() {
-        val original = ArtworkKey(identity = 7, generationId = 1, width = 100, height = 100)
-        val changed = original.copy(generationId = 2)
+        val resolver = ArtworkKeyResolver()
+        val bitmap = Any()
+        val semanticIdentity = ArtworkSemanticIdentity(uri = "art://track")
+        val original = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = bitmap,
+            bitmapIdentity = 7,
+            generationId = 1,
+            width = 100,
+            height = 100,
+            semanticIdentity = semanticIdentity,
+        )
+        val changed = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = bitmap,
+            bitmapIdentity = 7,
+            generationId = 2,
+            width = 100,
+            height = 100,
+            semanticIdentity = semanticIdentity,
+        )
 
         assertNotEquals(original, changed)
         assertSemanticChangeEmits {
             it.copy(artworkKey = changed)
         }
+    }
+
+    @Test
+    fun reparceledBitmapKeepsStableMetadataArtworkIdentity() {
+        val resolver = ArtworkKeyResolver()
+        val semanticIdentity = ArtworkSemanticIdentity(uri = "art://track")
+        val original = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = Any(),
+            bitmapIdentity = 7,
+            generationId = 2,
+            width = 640,
+            height = 360,
+            semanticIdentity = semanticIdentity,
+        )
+        val reparceled = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = Any(),
+            bitmapIdentity = 8,
+            generationId = 12,
+            width = 640,
+            height = 360,
+            semanticIdentity = semanticIdentity,
+        )
+
+        assertEquals(original, reparceled)
+    }
+
+    @Test
+    fun changedArtworkUriChangesSemanticArtworkIdentity() {
+        val resolver = ArtworkKeyResolver()
+        val original = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = Any(),
+            bitmapIdentity = 7,
+            generationId = 2,
+            width = 640,
+            height = 360,
+            semanticIdentity = ArtworkSemanticIdentity(uri = "art://track-a"),
+        )
+        val changed = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = Any(),
+            bitmapIdentity = 8,
+            generationId = 12,
+            width = 640,
+            height = 360,
+            semanticIdentity = ArtworkSemanticIdentity(uri = "art://track-b"),
+        )
+
+        assertNotEquals(original, changed)
+    }
+
+    @Test
+    fun stableArtworkIdentityBookkeepingIsBounded() {
+        val resolver = ArtworkKeyResolver(maxStableEntries = 2)
+        repeat(3) { index ->
+            resolver.resolve(
+                playbackId = "player-$index",
+                bitmap = Any(),
+                bitmapIdentity = index,
+                generationId = index,
+                width = 100,
+                height = 100,
+                semanticIdentity = ArtworkSemanticIdentity(uri = "art://$index"),
+            )
+        }
+
+        assertEquals(2, resolver.stableEntryCount())
     }
 
     @Test
@@ -169,6 +257,11 @@ class AndroidMediaSessionObserverTest {
         canSkipNext = false,
         canSkipPrevious = false,
         canSeek = true,
-        artworkKey = ArtworkKey(identity = 7, generationId = 1, width = 100, height = 100),
+        artworkKey = ArtworkKey(
+            source = ArtworkSourceIdentity.Bitmap(7),
+            revision = 1,
+            width = 100,
+            height = 100,
+        ),
     )
 }

@@ -49,7 +49,7 @@ class AndroidMediaArtworkPipelineTest {
             onEncodeStarted = { stats.artworkEncodeStarted.incrementAndGet() },
             onEncodeCompleted = { stats.artworkEncodeCompleted.incrementAndGet() },
         )
-        val artwork = ArtworkKey(1, 1, 100, 100)
+        val artwork = artworkKey(1)
         val candidate = snapshot(artwork).copy(appName = labels.labelFor("dev.player"))
         val initial = tracker.evaluate(candidate, false, artworkAvailable = false)
         pipeline.request("art", "source", candidate.playbackId) {
@@ -110,8 +110,8 @@ class AndroidMediaArtworkPipelineTest {
                 source
             },
         )
-        val original = ArtworkKey(1, 1, 100, 100)
-        val changed = original.copy(generationId = 2)
+        val original = artworkKey(1)
+        val changed = original.copy(revision = 2)
 
         pipeline.request(original, "old", "player") {}
         executor.runAll()
@@ -159,8 +159,8 @@ class AndroidMediaArtworkPipelineTest {
     @Test
     fun staleArtworkCannotReplaceNewerSnapshot() {
         val tracker = MediaSnapshotTracker(MutableMediaObserverStats())
-        val artworkA = ArtworkKey(1, 1, 100, 100)
-        val artworkB = ArtworkKey(2, 1, 100, 100)
+        val artworkA = artworkKey(1)
+        val artworkB = artworkKey(2)
         val initial = snapshot(artworkA)
         val initialDecision = tracker.evaluate(
             initial,
@@ -187,7 +187,7 @@ class AndroidMediaArtworkPipelineTest {
     @Test
     fun removedSessionRejectsArtworkCompletion() {
         val tracker = MediaSnapshotTracker(MutableMediaObserverStats())
-        val artwork = ArtworkKey(1, 1, 100, 100)
+        val artwork = artworkKey(1)
         val candidate = snapshot(artwork)
         val decision = tracker.evaluate(candidate, false, artworkAvailable = false)
 
@@ -268,6 +268,13 @@ class AndroidMediaArtworkPipelineTest {
         assertEquals(2L, stats.snapshot().snapshotsEmitted)
         assertFalse(snapshots.isPosted(initial.playbackId))
     }
+
+    private fun artworkKey(identity: Int, revision: Int = 1): ArtworkKey = ArtworkKey(
+        source = ArtworkSourceIdentity.Bitmap(identity),
+        revision = revision,
+        width = 100,
+        height = 100,
+    )
 
     private fun pipeline(
         executor: QueuedExecutor,

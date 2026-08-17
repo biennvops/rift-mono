@@ -26,6 +26,9 @@ import java.util.concurrent.TimeUnit
 private data class MediaArtworkSource(
     val key: ArtworkKey,
     val bitmap: Bitmap,
+    val generationId: Int,
+    val width: Int,
+    val height: Int,
 )
 
 /**
@@ -57,6 +60,7 @@ class AndroidMediaSessionObserver(
 
     private val stats = MutableMediaObserverStats()
     private val snapshotTracker = MediaSnapshotTracker(stats)
+    private val artworkKeyResolver = ArtworkKeyResolver()
     private val appLabelCache = MediaAppLabelCache(::resolveAppLabel, stats)
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
@@ -156,6 +160,7 @@ class AndroidMediaSessionObserver(
         controllersById.keys.toList().forEach { removeController(it) }
         missingSessions.clear()
         snapshotTracker.clear()
+        artworkKeyResolver.clear()
         appLabelCache.clear()
         Log.d(tag, "Media observer stats: ${stats.snapshot()}")
     }
@@ -271,6 +276,7 @@ class AndroidMediaSessionObserver(
         val controller = controllersById.remove(id) ?: return
         callbacksById.remove(id)?.let { controller.unregisterCallback(it) }
         artworkPipeline?.removeRequester(id)
+        artworkKeyResolver.remove(id)
         if (snapshotTracker.remove(id)) {
             val payload = mapOf(
                 "eventType" to "removed",
@@ -298,7 +304,8 @@ class AndroidMediaSessionObserver(
         }
 
         val artwork = artworkBitmap(metadata)
-        val artworkKey = artwork?.let(::artworkKeyFor)
+        val artworkSource = artwork?.let { bitmap -> artworkSourceFor(id, metadata, bitmap) }
+        val artworkKey = artworkSource?.key
         val pipeline = artworkPipeline
         pipeline?.retainRequesterForKey(id, artworkKey)
         val artworkLookup = artworkKey?.let { key -> pipeline?.lookup(key) }
@@ -335,7 +342,7 @@ class AndroidMediaSessionObserver(
 
         if (
             decision.requestArtwork &&
-            artwork != null &&
+            artworkSource != null &&
             artworkKey != null &&
             artworkLookup?.isCached != true &&
             pipeline != null
@@ -343,7 +350,7 @@ class AndroidMediaSessionObserver(
             val requestedObservationGeneration = observationGeneration
             pipeline.request(
                 key = artworkKey,
-                source = MediaArtworkSource(artworkKey, artwork),
+                source = artworkSource,
                 requesterId = id,
             ) { encoded ->
                 acceptArtwork(
@@ -418,23 +425,71 @@ class AndroidMediaSessionObserver(
         metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
 
-    private fun artworkKeyFor(bitmap: Bitmap): ArtworkKey = ArtworkKey(
-        identity = System.identityHashCode(bitmap),
-        generationId = bitmap.generationId,
-        width = bitmap.width,
-        height = bitmap.height,
-    )
+    private fun artworkSourceFor(
+        playbackId: String,
+        metadata: MediaMetadata?,
+        bitmap: Bitmap,
+    ): MediaArtworkSource? {
+        if (bitmap.isRecycled) return null
+        val generationId = bitmap.generationId
+        val width = bitmap.width
+        val height = bitmap.height
+        val key = artworkKeyResolver.resolve(
+            playbackId = playbackId,
+            bitmap = bitmap,
+            bitmapIdentity = System.identityHashCode(bitmap),
+            generationId = generationId,
+            width = width,
+            height = height,
+            semanticIdentity = artworkSemanticIdentity(metadata),
+        )
+        return MediaArtworkSource(
+            key = key,
+            bitmap = bitmap,
+            generationId = generationId,
+            width = width,
+            height = height,
+        )
+    }
+
+    private fun artworkSemanticIdentity(metadata: MediaMetadata?): ArtworkSemanticIdentity? {
+        if (metadata == null) return null
+        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)?.takeIf { it.isNotBlank() }
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.takeIf { it.isNotBlank() }
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)?.takeIf { it.isNotBlank() }
+        if (uri != null) {
+            return ArtworkSemanticIdentity(uri = uri)
+        }
+        val mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.takeIf { it.isNotBlank() }
+        if (mediaId != null) {
+            return ArtworkSemanticIdentity(mediaId = mediaId)
+        }
+
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        val album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).takeIf { it > 0L }
+        if (title == null && artist == null && album == null && duration == null) {
+            return null
+        }
+        return ArtworkSemanticIdentity(
+            title = title,
+            artist = artist,
+            album = album,
+            durationMs = duration,
+        )
+    }
 
     private fun encodeArtwork(source: MediaArtworkSource): EncodedMediaArtwork? {
         val bitmap = source.bitmap
-        if (!bitmapMatchesKey(bitmap, source.key)) return null
+        if (!bitmapMatchesSource(bitmap, source)) return null
 
-        val scaled = if (bitmap.width > artworkMaxDimension || bitmap.height > artworkMaxDimension) {
-            val ratio = artworkMaxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
+        val scaled = if (source.width > artworkMaxDimension || source.height > artworkMaxDimension) {
+            val ratio = artworkMaxDimension.toFloat() / maxOf(source.width, source.height)
             Bitmap.createScaledBitmap(
                 bitmap,
-                (bitmap.width * ratio).toInt().coerceAtLeast(1),
-                (bitmap.height * ratio).toInt().coerceAtLeast(1),
+                (source.width * ratio).toInt().coerceAtLeast(1),
+                (source.height * ratio).toInt().coerceAtLeast(1),
                 true,
             )
         } else {
@@ -451,7 +506,7 @@ class AndroidMediaSessionObserver(
                 scaled.recycle()
             }
         }
-        if (!bitmapMatchesKey(bitmap, source.key)) return null
+        if (!bitmapMatchesSource(bitmap, source)) return null
 
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString(separator = "") { byte ->
@@ -465,8 +520,11 @@ class AndroidMediaSessionObserver(
         )
     }
 
-    private fun bitmapMatchesKey(bitmap: Bitmap, key: ArtworkKey): Boolean =
-        !bitmap.isRecycled && artworkKeyFor(bitmap) == key
+    private fun bitmapMatchesSource(bitmap: Bitmap, source: MediaArtworkSource): Boolean =
+        !bitmap.isRecycled &&
+            bitmap.generationId == source.generationId &&
+            bitmap.width == source.width &&
+            bitmap.height == source.height
 
     private fun startArtworkPipeline() {
         check(artworkPipeline == null)

@@ -1,13 +1,117 @@
 package dev.rift.app
 
+import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicLong
 
+internal data class ArtworkSemanticIdentity(
+    val uri: String? = null,
+    val mediaId: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val durationMs: Long? = null,
+)
+
+internal sealed interface ArtworkSourceIdentity {
+    data class Metadata(val value: ArtworkSemanticIdentity) : ArtworkSourceIdentity
+
+    data class Bitmap(val identity: Int) : ArtworkSourceIdentity
+}
+
 internal data class ArtworkKey(
-    val identity: Int,
-    val generationId: Int,
+    val source: ArtworkSourceIdentity,
+    val revision: Int,
     val width: Int,
     val height: Int,
 )
+
+internal class ArtworkKeyResolver(
+    private val maxStableEntries: Int = 32,
+) {
+    private data class StableBase(
+        val identity: ArtworkSemanticIdentity,
+        val width: Int,
+        val height: Int,
+    )
+
+    private data class LastArtwork(
+        val bitmap: Any,
+        val generationId: Int,
+        val stableBase: StableBase?,
+        val key: ArtworkKey,
+    )
+
+    private val lastByPlaybackId = HashMap<String, LastArtwork>()
+    private val revisionByStableBase = object : LinkedHashMap<StableBase, Int>(
+        maxStableEntries,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<StableBase, Int>?): Boolean =
+            size > maxStableEntries
+    }
+
+    init {
+        require(maxStableEntries > 0)
+    }
+
+    fun resolve(
+        playbackId: String,
+        bitmap: Any,
+        bitmapIdentity: Int,
+        generationId: Int,
+        width: Int,
+        height: Int,
+        semanticIdentity: ArtworkSemanticIdentity?,
+    ): ArtworkKey {
+        val stableBase = semanticIdentity?.let { StableBase(it, width, height) }
+        val previous = lastByPlaybackId[playbackId]
+        val key = if (stableBase == null) {
+            ArtworkKey(
+                source = ArtworkSourceIdentity.Bitmap(bitmapIdentity),
+                revision = generationId,
+                width = width,
+                height = height,
+            )
+        } else {
+            var revision = revisionByStableBase[stableBase]
+                ?: previous?.takeIf { it.stableBase == stableBase }?.key?.revision
+                ?: 0
+            if (
+                previous?.stableBase == stableBase &&
+                previous.bitmap === bitmap &&
+                previous.generationId != generationId
+            ) {
+                revision += 1
+            }
+            revisionByStableBase[stableBase] = revision
+            ArtworkKey(
+                source = ArtworkSourceIdentity.Metadata(stableBase.identity),
+                revision = revision,
+                width = width,
+                height = height,
+            )
+        }
+        lastByPlaybackId[playbackId] = LastArtwork(
+            bitmap = bitmap,
+            generationId = generationId,
+            stableBase = stableBase,
+            key = key,
+        )
+        return key
+    }
+
+    internal fun stableEntryCount(): Int = revisionByStableBase.size
+
+    fun remove(playbackId: String) {
+        lastByPlaybackId.remove(playbackId)
+    }
+
+    fun clear() {
+        lastByPlaybackId.clear()
+        revisionByStableBase.clear()
+    }
+}
 
 internal data class MediaSnapshotState(
     val playbackId: String,
