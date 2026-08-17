@@ -1,45 +1,82 @@
-# Experimental macOS Private Notification Actions
+# Experimental macOS Notification Actions
 
-Third-party source-notification actions on macOS are an experimental, development-only capability. They are currently unavailable on the tested host because no safe, entitlement-feasible path can enumerate and remove the exact Notification Center item represented by Rift's source record.
+macOS notification dismissal is available only in an explicit Accessibility build and only for records that the current Accessibility tree exposes as one individually actionable notification. The default Rift build still compiles no notification-action backend and advertises `isDismissible: false` and `isOpenable: false`.
 
-Normal builds do not compile private framework probes and continue to advertise macOS notifications with `isDismissible: false` and `isOpenable: false`. Private builds also advertise no action unless a future backend can prove exact targeting and verified removal.
+The private-framework experiment remains unavailable. It identified the internal removal identity but did not provide an entitlement-feasible way for Rift to resolve or mutate the live object.
 
-## Build gate
+## Final backend decision
 
-The default build is the normal flavor:
+| Backend | Exact identity | Remove one | Verify target and siblings | Permission or entitlement | Final result |
+|---|---:|---:|---:|---|---|
+| Public `UserNotifications` | No third-party enumeration | No | No | Normal app authorization | Unsupported |
+| Private native | Internal tuple identified, but unavailable to Rift | API exists, not safely callable | No authorized live enumeration | Apple-private Notification Center entitlement | Unsupported |
+| Accessibility | Yes, DB UUID equals AX identifier | Yes, when individually exposed | Yes | Explicit Accessibility grant | Optional, fail-closed |
+
+The Accessibility result is deliberately conditional. A notification is dismissible only while all of these are true:
+
+1. The extractor app is trusted for Accessibility.
+2. Notification Center is running.
+3. Exactly one `AXNotificationCenterBanner` or `AXNotificationCenterAlert` has an `AXIdentifier` equal to the Rift database UUID.
+4. That element exposes exactly one individual Close action.
+5. After the action, the target UUID is absent and every other notification UUID visible before the action remains present.
+
+Closed Notification Center, a collapsed stack, an ambiguous UUID, missing permission, a missing Close action, or failed verification all produce `CapabilityUnavailable` without retargeting another notification.
+
+## Build flavors
+
+The default build remains action-free:
 
 ```bash
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
 
-The private development flavor requires an explicit switch:
+The optional Accessibility flavor requires an explicit switch:
+
+```bash
+RIFT_MACOS_ACCESSIBILITY_NOTIFICATION_ACTIONS=1 \
+  daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
+```
+
+This flavor compiles only public `ApplicationServices` and AppKit APIs. It adds the diagnostic bundle marker:
+
+```text
+RiftAccessibilityNotificationActionsEnabled = true
+```
+
+It never prompts at daemon or extractor startup. The user must explicitly add and enable the installed **Rift Notification Extractor** in **System Settings → Privacy & Security → Accessibility**. Notification extraction continues to require only Full Disk Access; dismissal remains unavailable when Accessibility is not granted.
+
+The private development flavor remains separately gated:
 
 ```bash
 RIFT_DEV_PRIVATE_MACOS_NOTIFICATION_ACTIONS=1 \
   daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
 
-`RIFT_DEV_PRIVATE_MACOS_NOTIFICATION_ACTIONS` accepts only `0` or `1` and defaults to `0`. The private flavor passes both `RIFT_PRIVATE_API` and `RIFT_PRIVATE_NOTIFICATION_ACTIONS` to the Swift compiler and inserts this diagnostic bundle marker before signing:
+It adds:
 
 ```text
 RiftDevPrivateNotificationActionsEnabled = true
 ```
 
-The normal flavor contains neither compiler condition nor marker. The build script also verifies that the Rift-owned sentinel `RIFT_PRIVATE_NOTIFICATION_ACTIONS_V1` is present only in the private broker and that the complete app signature is valid. The script refuses to overwrite an existing output bundle, so move or remove `dist/macos/Rift Notification Extractor.app` before changing flavors.
+Both variables accept only `0` or `1`. The private and Accessibility flavors are mutually exclusive. The build verifies the corresponding Rift-owned binary sentinel and bundle marker, verifies that other flavor sentinels are absent, and validates the complete app signature. The source Info.plist contains neither marker.
+
+The build script refuses to overwrite `dist/macos/Rift Notification Extractor.app`; move or remove a prior generated bundle before changing flavors.
 
 ## Containment and request surface
 
-Private probing is contained in the signed Notification Extractor XPC broker. The database worker remains read-only and does not receive native action operations.
+The signed, authenticated extractor XPC broker owns notification actions. The read-only C# database worker never receives a native action operation.
 
-The authenticated `request(Data) -> Data` XPC protocol recognizes three bounded native operations:
+The broker recognizes three bounded native operations:
 
 - `getNotificationActionBackendStatus`
 - `getNotificationActionCapabilities`
 - `dismissNotification`
 
-Capability and dismissal requests require non-empty `notificationId` and `packageName` strings of at most 512 characters. Other operations continue to the existing extraction worker. The broker exposes no generic selector calls, raw private objects, arbitrary XPC forwarding, bundle-wide clearing, SQL, or process commands.
+Capability and dismissal requests require non-empty `notificationId` and `packageName` strings of at most 512 characters. Extraction operations continue to the private worker. The broker exposes no generic selector invocation, raw private objects, arbitrary XPC forwarding, paths, SQL, process commands, bundle-wide clearing, or UI coordinates.
 
-A normal build reports:
+The macOS daemon derives both fields from its locally retained `NotificationSyncRecord`. A remote peer supplies only the protocol notification ID and action; peer-supplied title, body, bundle, AX query, or native identifier is never targeting authority.
+
+A default build reports:
 
 ```json
 {
@@ -51,94 +88,164 @@ A normal build reports:
 }
 ```
 
-A private build probes the installed frameworks, required classes and selectors, and its own code-signing entitlements. On the tested host it reports `backend: "private"`, `available: false`, and `reason: "privateEntitlementRequired"`. Exact capability and dismissal calls therefore return false without touching a notification.
-
-No macOS `ILocalNotificationActionHandler` is registered while this backend is unavailable. The generic notification action routing remains unchanged, and the macOS observer continues to publish both action flags as false.
+An Accessibility build reports `backend: "accessibility"`. Its status is unavailable with `accessibilityNotTrusted` or `notificationCenterUnavailable`; per-record capability still remains false until exact identity and an individual Close action resolve.
 
 ## Tested host
-
-Research and runtime probing were performed on:
 
 | Property | Value |
 |---|---|
 | macOS | 26.6 (build 25G72) |
 | Architecture | arm64 |
-| Installed framework version | UserNotificationsCore 640.6.5 |
-| Xcode SDK used to build | macOS 26.5 |
+| UserNotificationsCore | 640.6.5 |
+| Xcode SDK | macOS 26.5 |
 
-The framework executables are supplied through the dyld shared cache on this OS. Their on-disk framework executable symlinks are intentionally unresolved, but `dlopen` loads both frameworks successfully.
+The private framework executables are supplied through the dyld shared cache on this OS. Their on-disk executable symlinks are unresolved, but `dlopen` loads the frameworks. All private names and AX observations below are version-specific runtime evidence, not stable Apple contracts.
 
-## Notification service research
+## Public API result
 
-Read-only runtime enumeration established these relevant interfaces on the tested host:
+A source app can query and remove only its own delivered notifications through `UNUserNotificationCenter`. Rift is a separate process observing notifications from other apps, so the public API cannot enumerate or dismiss those source notifications. It also cannot verify sibling preservation for a third-party source.
+
+The source-owned public API was used only as an independent oracle for synthetic test notifications after AX actions.
+
+## Private API experiment
+
+Read-only runtime enumeration found these relevant interfaces:
 
 - `UserNotificationsCore.NotificationSystemServiceClient`
   - `notificationRecordForIdentifier:bundleIdentifier:`
   - `removeNotificationRecordsForIdentifiers:bundleIdentifier:`
 - `UNCNotificationCoreServiceClient`
-  - repository enumeration and record-removal methods
+  - bundle enumeration, exact lookup, and record-removal methods
+- `UNCNotificationSystemServiceConnection`
+  - exact lookup and removal over a BoardServices connection
+- `UNSNotificationRecord`
+  - request `identifier`, but no source UUID accessor
 - `NCNotificationRequest`
-  - separate notification identifier and UUID concepts
+  - distinct `notificationIdentifier`, `uuid`, and `sourceInfo`
 - `NCNotificationDispatcher`
-  - request withdrawal and destination dismissal methods used inside Notification Center
+  - UUID lookup, request withdrawal, and destination dismissal methods inside Notification Center
 
-These names are runtime-probed only in the private build. They are recorded here as observations for the tested OS, not as a stable Apple contract. The service clients are Objective-C-visible wrappers over BoardServices/XPC rather than a self-contained in-process delivered store. Although the remove selector is scoped by identifiers and bundle identifier, its one-item behavior could not be qualified because the exact lookup precondition failed.
+The system service client instantiated in a certificate-signed third-party process, but exact lookups logged `No endpoint in system service client` and returned no record. The repository client did not complete outside its intended service context. `NCNotificationDispatcher` operates on Notification Center's in-process destinations rather than a third-party delivered store.
 
-The live delivered-state path is owned by `/usr/sbin/usernoted` and Notification Center. `usernoted` publishes `com.apple.usernoted.notificationcenter`; Notification Center itself carries `com.apple.private.notificationcenter`. The installed service binary states that communication is denied when a connection lacks an accepted private Notification Center entitlement. The signed Rift research probe has none of those Apple-only entitlements and cannot legitimately acquire one.
+No private mutation method was invoked because authorized exact live-object resolution did not succeed.
 
-`UserNotificationsCore` also exposes repository/system-service clients. A certificate-signed third-party probe could instantiate the system client, but it returned no record for a newly delivered test notification. The core repository enumeration call did not complete when invoked outside its intended service context. Neither route provided a usable third-party delivered-notification enumeration.
+## Controlled identity correlation
 
-## Exact identity result
+Two signed synthetic source apps posted only `RIFT-RESEARCH-*` content. Source A used UUID `11A3E333-A5A3-47BF-AD69-056E523AD0EA`; source B used `FD59D6FB-82CD-4A16-8EB2-179B245EA590`.
 
-Rift currently derives `notificationId` from the Notification Center database row's `record.uuid`. Read-only inspection found that the same UUID is stored in the record property list as `uuid`.
+| Test | Rift DB UUID | `req.iden` | system `ident` | source | bundle | posted UTC |
+|---|---|---|---|---|---|---|
+| A, one item | `3033f1a6-ffbf-4e96-a56e-3ef0210fa424` | `RIFT-RESEARCH-A-ONE` | `BD0F-209F` | A | `com.rift.notification-research.a` | `2026-08-17T12:01:27.306201Z` |
+| B, different 1 | `a2e8fe2e-9aa6-472e-af5c-45beeccfaf1d` | `RIFT-RESEARCH-B-ONE` | `A94D-57DE` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.373920Z` |
+| B, different 2 | `54bbe65c-218d-4e91-82f9-606e9e2363e0` | `RIFT-RESEARCH-B-TWO` | `589F-07B9` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.390644Z` |
+| C, same title 1 | `f2cbcb40-4b77-4078-b565-63a64d797223` | `RIFT-RESEARCH-C-ONE` | `B267-C957` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.402710Z` |
+| C, same title 2 | `9a69609c-1de6-4978-af5e-8978e1a6affd` | `RIFT-RESEARCH-C-TWO` | `2894-6120` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.414152Z` |
+| D, identical 1 | `fe2369d3-7a84-4f23-8f5e-956d78764795` | `RIFT-RESEARCH-D-ONE` | `E7E8-C407` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.428725Z` |
+| D, identical 2 | `825b95c8-7e33-4308-b700-f96c2888bb6e` | `RIFT-RESEARCH-D-TWO` | `FEAB-F49E` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.443204Z` |
+| E, app A | `2c31ac2c-4afa-4b0f-8b2f-150318bc5d1e` | `RIFT-RESEARCH-E-A` | `5DBD-389D` | A | `com.rift.notification-research.a` | `2026-08-17T12:03:51.456216Z` |
+| E, app B | `a3f0f3bb-eeb0-46e9-9ffa-e6bce4509772` | `RIFT-RESEARCH-E-B` | `D5B0-D10B` | B | `com.rift.notification-research.b` | `2026-08-17T12:03:51.469866Z` |
 
-For a UserNotifications-style source record, the property list also contained `req.iden`, but it was a different application request identifier. A legacy Script Editor test notification had the database UUID and no `req.iden` at all. The private service lookup returned no record for either the database UUID or the separate request identifier supplied with the exact bundle identifier.
+Each record plist also contained `app`, `date`, `orig`, `styl`, `req.dest`, `srce`, and `uuid`. The `delivered.list` table stored DB UUIDs, not internal `ident` values.
 
-Therefore the tested system does not provide Rift with a deterministic mapping from its database UUID to one live private service object. Title, body, app display name, and timestamp were deliberately not used as substitutes. The private remove selector was not invoked because doing so without exact resolution would violate the sibling-safety rule.
+`usernoted` logged its own pre-delivery exact-removal lookup as:
 
-This leaves the research questions with the following outcome:
+```text
+removeDeliveredNotification(similarTo: [ident], source: source UUID)
+```
 
-| Question | Tested result |
+The real internal tuple is therefore `ident + source UUID`. The DB UUID, request identifier, internal `ident`, and source UUID are four distinct identities. The internal `ident` is not present in Rift's read-only row or plist; diagnostic unified logs are neither durable nor a production targeting authority.
+
+Private lookup with DB UUID + bundle, request identifier + bundle, and internal `ident` + bundle all failed outside the intended service host. The private outcome is both:
+
+- `UNRESOLVABLE` from Rift's database identity to an authorized live service object; and
+- `UNAUTHORIZED` for the system Notification Center connection required to obtain that object.
+
+## Entitlement boundary
+
+`usernoted` publishes `com.apple.usernoted.notificationcenter`. Its installed binary contains the fail-closed message:
+
+```text
+Connection does not have the proper entitlement (...) to connect to the system notification center. All communication will be denied.
+```
+
+Read-only arm64e disassembly ties the system-center branch to:
+
+```text
+com.apple.private.notificationcenter-system
+```
+
+Notification Center itself is Apple-signed with `com.apple.private.notificationcenter`; `usernoted` carries `com.apple.private.notificationcenter.server`. The signed Rift probes had none of these entitlements. No entitlement was forged, and this branch of the experiment stopped there.
+
+## Accessibility experiment
+
+Accessibility permission was first checked with prompting disabled and correctly returned `notTrusted`. Permission was then granted manually to the signed research app. Rift's implementation also checks without prompting; permission remains an explicit user choice.
+
+The macOS 26 AX hierarchy produced these states:
+
+| UI state | AX result | Capability |
+|---|---|---|
+| Notification Center closed | Delivered history absent from tree | False |
+| Transient banner | `AXNotificationCenterBanner`; exact DB UUID; individual Close | Potentially true, but DB visibility timing is not dependable for a later peer action |
+| Collapsed app stack | `AXNotificationCenterBannerStack`; `AXPress`, Show Details, Clear All | False |
+| Expanded app stack | One `AXNotificationCenterBanner` per record; exact DB UUID; individual Close | True per exact record |
+| Permission revoked or process absent | Tree unavailable | False |
+
+For an individual synthetic notification, the 36-character AX identifier exactly matched the uppercase Rift DB UUID. For example, the AX identifier hash matched `DAD7FE5E-89B1-4164-9FE7-2E5F0716D40D`, not its request ID, internal `ident`, or source UUID.
+
+The individual element exposed `AXPress` and custom Close/Show Details actions. The implementation never selects `AXPress`, Show Details, or Clear All. On the tested English host, the custom Close action begins `Name:Close`; an unknown localization or action representation fails closed.
+
+### Removal qualification
+
+| Scenario | Result |
 |---|---|
-| Can a locally signed third-party process enumerate all delivered items? | No supported route found |
-| Is a private repository/client present? | Yes, but not usable as a third-party exact delivered store |
-| Does the database UUID map to the service record identifier? | Not established; observed request identifier differs |
-| Is a single-record remove API present? | Yes at runtime, but exact authorized targeting is unavailable |
-| Is an unavailable private entitlement involved? | Yes for Notification Center state access |
-| Can disappearance be verified? | Not without first resolving the exact live object |
-| Does it work after broker restart or without SIP changes? | Restart behavior is not applicable; no SIP change or injection was attempted |
-| Is it qualified on other architectures or OS builds? | No; unknown builds and architectures fail closed |
+| Unique history item | Exact target disappeared; source app no longer listed it; pinned sibling remained |
+| Same app, identical visible content | D1 disappeared; D2 remained delivered |
+| Same content, two source apps | E-A disappeared; E-B remained delivered |
+| Already removed target | `unresolvable`; no action; sibling remained |
+| Collapsed stack | No individual Close; no mutation |
+| New item appearing during verification | Allowed only if every pre-existing sibling remains |
+| Any pre-existing sibling disappears during verification | Failure, even if the target also disappeared |
 
-## Accessibility fallback result
+The backend serializes action checks, resolves exactly one UUID immediately before mutation, and polls at bounded 100 ms intervals for at most two seconds. Success requires target absence plus preservation of every other visible UUID captured before the action.
 
-A certificate-signed Accessibility probe used `AXIsProcessTrustedWithOptions` with prompting disabled. It was not trusted on the test host. Without manual permission, it could not inspect Notification Center; no permission prompt was shown.
+## Dynamic capability behavior
 
-More importantly, an exact stable AX identity corresponding to the database UUID was not established without opening or manipulating Notification Center. The fallback stop rule therefore applies. Rift does not request Accessibility, open or focus Notification Center, synthesize input, or perform AppleScript GUI scripting.
+The macOS observer asks the authenticated broker for per-record capability. It publishes `isDismissible: true` only when that exact UUID is individually actionable. It periodically rechecks tracked records so expanding a stack can upgrade capability and collapsing the stack, closing Notification Center, revoking Accessibility, or losing the extractor can downgrade it.
 
-## Failure behavior
+Upgrades are bounded to the 64 most recent non-dismissible tracked records per poll. Every record currently advertised as dismissible is always rechecked, so stale action buttons are removed fail-closed. `isOpenable` remains false.
 
-The private runtime probe caches one fail-closed status for the broker process. Current local reasons are:
+Before performing a remote request, the daemon rechecks capability and the broker resolves the UUID again. A race cannot retarget a sibling.
 
+## Failure reasons
+
+Relevant local backend reasons include:
+
+- `notCompiled`
 - `frameworkNotFound`
 - `privateApiMismatch`
 - `privateEntitlementRequired`
 - `exactIdentityUnavailable`
+- `accessibilityNotTrusted`
+- `notificationCenterUnavailable`
+- `accessibilityIdentityAmbiguous`
+- `accessibilityNoIndividualCloseAction`
+- `accessibilityActionFailed`
+- `verificationFailed`
 
-Every state keeps `available`, `canEnumerate`, and `canDismiss` false. A framework, class, selector, entitlement, or identity mismatch cannot crash notification extraction or enable a peer-visible action.
-
-A future implementation must still require exactly one native object matching both stable notification identity and bundle identifier, remove only that object, and verify its disappearance within a bounded interval before reporting success. Until all three conditions are demonstrated, unsupported is the intended result.
+Only a verified Accessibility removal becomes protocol success. All other states map to `CapabilityUnavailable` at the peer boundary.
 
 ## Safety constraints
 
 This work does not:
 
-- mutate the Notification Center SQLite database;
+- mutate Notification Center SQLite data;
 - restart `usernoted`, `usernotificationsd`, or Notification Center;
 - disable SIP;
 - inject into another process;
 - forge private entitlements;
 - patch system binaries;
-- use global mouse or keyboard automation;
-- use AppleScript GUI scripting.
+- use global mouse or keyboard events;
+- use coordinates, OCR, screen scraping, AppleScript, or System Events;
+- invoke Clear All or bundle-wide notification removal.
 
-Private APIs are named plainly in private-only code and this research note. The build boundary is intended to isolate unsupported behavior, not conceal it from scanning.
+Private APIs remain plainly named, development-only, and off by default. Accessibility is separately gated, uses the semantic AX tree directly, and never silently requests permission.

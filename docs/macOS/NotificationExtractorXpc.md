@@ -1,22 +1,62 @@
-# Authenticated extractor IPC prototype
+# Notification Extractor XPC
 
-The extractor hardening branch prototypes a launchd Mach service named:
+The production macOS extractor transport is a launchd Mach service named:
 
 ```text
 com.rift.notification-extractor.xpc
 ```
 
-The extractor app's main executable is a small Swift XPC broker. The existing C# reader is retained as a private worker under:
+The app's main executable is a small Swift broker. The C# database reader remains a private helper at:
 
 ```text
 Rift Notification Extractor.app/Contents/Helpers/rift-notification-extractor-worker
 ```
 
-The broker accepts only the existing newline-delimited JSON operation contract over one XPC method carrying `Data`. It forwards requests to the worker through inherited standard streams and enforces the same 64 KiB request, 1 MiB response, and 10-second timeout limits.
+The authenticated broker has two bounded request branches:
+
+```text
+Authenticated XPC broker
+    |
+    +-- extraction operations
+    |       |
+    |       +-- private stdin/stdout stream
+    |               |
+    |               +-- C# read-only database worker
+    |
+    +-- native notification-action operations
+            |
+            +-- compiled native backend, or fail-closed none backend
+```
+
+The broker does not forward every request to the worker. It parses only enough JSON to recognize its fixed native operation names; all other bounded requests continue to the extraction worker for normal protocol validation.
+
+## Extraction operations
+
+The worker accepts only:
+
+- `getStatus`
+- `scanNotificationChanges`
+- `rescanActiveNotifications`
+
+The broker launches a fresh worker for each extraction request and sends exactly one newline-delimited JSON object over inherited standard input. The worker has no public stdin/stdout endpoint and accepts no paths, SQL, shell commands, or generic file reads.
+
+## Native notification-action operations
+
+The broker handles these operations in-process:
+
+- `getNotificationActionBackendStatus`
+- `getNotificationActionCapabilities`
+- `dismissNotification`
+
+Capability and dismissal requests require non-empty `notificationId` and `packageName` strings no longer than 512 characters. The surface returns JSON values only; it exposes no Objective-C object, AX handle, selector, arbitrary XPC target, or generic method invocation.
+
+A default build contains a none backend and reports `notCompiled`. The optional Accessibility build and development-only private build are separate, mutually exclusive flavors. Their exact build gates and safety behavior are documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md).
+
+Accessibility operations stay in the FDA-bearing extractor process because that process owns the stable notification database identity and native UI lookup. The network-facing daemon receives no Accessibility handle and cannot submit peer-provided visible content as a query. The daemon first resolves the remote notification ID to its locally retained `NotificationSyncRecord`, then sends the record's ID and package name over authenticated XPC.
 
 ## Peer authentication
 
-The listener calls `setConnectionCodeSigningRequirement` before activation. Each development build binds the daemon identifier to the exact certificate used to sign the broker:
+Before activation, the listener applies a code-signing requirement to incoming connections. A development build binds the daemon identifier to the exact certificate used to sign the broker:
 
 ```text
 identifier "com.rift.daemon"
@@ -29,9 +69,9 @@ Create the local identity once with:
 daemon-cs/Tools/setup_rift_dev_signing.sh
 ```
 
-The script stores the private key only in the selected local keychain, refuses to replace an existing identity, and is safe to rerun. Both macOS app build scripts automatically prefer this identity when it is present. Rebuilds receive different code-directory hashes but retain the same designated certificate requirement, avoiding ad-hoc FDA churn.
+The script stores the private key only in the selected local keychain and refuses to replace an existing identity. Rebuilds receive new code-directory hashes but retain the certificate requirement, avoiding ad-hoc identity churn.
 
-Production builds derive an Apple-anchored requirement from their signing Team ID instead:
+Production builds derive an Apple-anchored requirement from their signing Team ID:
 
 ```text
 identifier "com.rift.daemon"
@@ -39,9 +79,23 @@ and anchor apple generic
 and certificate leaf[subject.OU] = "<Team ID>"
 ```
 
-The listener rejects clients before its delegate receives a connection.
+The listener rejects an invalid client before its delegate receives the connection.
 
-The daemon loads a small Swift bridge dynamic library into the C# daemon process. The bridge applies the corresponding certificate-pinned or Apple-anchored requirement to `com.rift.notification-extractor`. This keeps both ends of the peer identity check explicit without trusting a forgeable certificate subject. A separate command-line probe is provided only for signed-bundle testing and is not a production transport.
+The daemon loads a small Swift bridge dynamic library into its own process. The bridge applies the corresponding certificate-pinned or Apple-anchored requirement to `com.rift.notification-extractor`. Both peers therefore authenticate the other side. A command-line probe exists only for signed-bundle development testing and is not a production transport.
+
+## Bounds and failure behavior
+
+The single XPC method carries `Data` and enforces:
+
+- maximum request: 64 KiB;
+- maximum response: 1 MiB;
+- maximum worker error output: 1 MiB;
+- worker timeout: 10 seconds;
+- notification-action identity field: 512 characters.
+
+Malformed, oversized, timed-out, and unknown extraction requests fail within the existing worker protocol. A recognized malformed native request returns `invalidRequest` without starting the worker. Native backend exceptions cannot crash extraction; they return a closed unavailable result.
+
+Unknown operation names are not treated as native calls. They continue to the worker, which owns the canonical extraction-operation validation.
 
 ## Bundle and launchd layout
 
@@ -51,24 +105,25 @@ The extractor LaunchAgent advertises the Mach service and launches:
 ~/Applications/Rift Notification Extractor.app/Contents/MacOS/rift-notification-extractor
 ```
 
-Install only after reviewing the generated bundle and signing identity:
+Build and install only after reviewing the generated bundle and signing identity:
 
 ```bash
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/install_macos_notification_extractor.sh
 ```
 
-The installer refuses to overwrite an existing app bundle. It uses `launchctl bootstrap` for the current GUI user domain.
+Both scripts refuse to overwrite an existing app bundle. The installer uses `launchctl bootstrap` in the current GUI-user domain. Both the daemon and extractor builds require a certificate-backed signing identity; ad-hoc signatures cannot establish the pinned peer identity.
 
-The daemon app build now compiles the bridge library and signs the daemon executable with identifier `com.rift.daemon`. Both app builds require a certificate-backed signing identity; ad-hoc signatures cannot establish the pinned peer identity.
+Full Disk Access belongs to the extractor app. An Accessibility build also requires a separate, explicit user grant to that same installed app. Neither permission belongs to the daemon or Flutter UI, and basic notification synchronization does not depend on Accessibility.
 
-## Current status
+## Validation
 
-This branch has compile-time and bundle-layout validation. Runtime installation is deliberately separate because it changes a user LaunchAgent, replaces the FDA-bearing app, and requires FDA to be granted again. Before enabling it, test:
+The focused macOS test script compiles default, private, and Accessibility brokers, checks flavor sentinels, runs native request-validation and backend safety tests, validates rejected build-flag combinations, and checks shell syntax:
 
-- the correct signed daemon is accepted;
-- an incorrectly signed or unsigned client is rejected;
-- the worker is not reachable through the old public stdin/stdout path;
-- malformed, oversized, timed-out, and unknown requests remain bounded and fail closed.
+```bash
+daemon-cs/Rift.NotificationExtractor.macOS/Tools/test_macos_notification_actions.sh
+```
 
-Seatbelt confinement and no-network policy are a subsequent phase after these peer-authentication tests pass.
+The signed full-app build additionally verifies bundle markers, nested signatures, and broker/worker identifiers. Runtime installation remains a separate user action because it changes a LaunchAgent and the stable TCC-bearing app bundle.
+
+Authenticated XPC is the production extractor boundary. Seatbelt confinement remains separate follow-up hardening.

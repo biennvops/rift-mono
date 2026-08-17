@@ -4,7 +4,7 @@ Rift uses a dedicated background app for reading Notification Center metadata on
 
 ## Security boundary
 
-The extractor bundle identifier is `com.rift.notification-extractor`. It has no network listener. Its signed Swift broker accepts compact JSON through one authenticated XPC method carrying `Data`, and forwards only extraction operations to a private C# worker over inherited standard streams. The worker's operation vocabulary is fixed:
+The extractor bundle identifier is `com.rift.notification-extractor`. It has no network listener. Its signed Swift broker accepts compact JSON through one authenticated XPC method carrying `Data`. Extraction operations go to a private C# worker over inherited standard streams; bounded notification-action operations, when explicitly compiled, stay in the native broker. The worker's operation vocabulary is fixed:
 
 - `getStatus`
 - `scanNotificationChanges`
@@ -20,7 +20,7 @@ Database access is read-only. Each scan uses SQLite's online backup API to creat
 
 The extractor validates the expected `app` and `record` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Neither `record.presented` nor `delivered.list` is a reliable active-notification set on current macOS: `delivered.list` retains historical per-app UUIDs after notifications are no longer visible. `rescanActiveNotifications` therefore fails closed with `activeStateUnavailable` rather than replaying stale notification history. Malformed notification payloads are skipped and counted without returning their content.
 
-macOS-origin records always report `isDismissible: false` and `isOpenable: false`, as required by notification sync v1. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier. It does not return the full property-list payload.
+Default macOS-origin records report `isDismissible: false` and `isOpenable: false`. An explicitly built and manually authorized Accessibility backend may set `isDismissible: true` for one record only while its database UUID resolves to exactly one individually actionable AX notification. It never advertises open. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier; it does not return the full property-list payload.
 
 ## Building the app
 
@@ -30,7 +30,7 @@ From the repository root:
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
 
-Normal builds compile no private notification-action probes. The explicit development-only flavor and its current unavailable research result are documented in [Experimental macOS Private Notification Actions](PrivateNotificationActions.md).
+Default builds compile no notification-action backend. The separate optional Accessibility flavor and the development-only private-framework flavor are documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md). Both require explicit build switches; neither is silently enabled.
 
 The script defaults to the current architecture and creates:
 
@@ -62,6 +62,12 @@ Use the same signing identity and bundle location between builds so macOS retain
 
 FDA belongs only to the extractor. Do not grant FDA to Rift Daemon or the Flutter UI.
 
+## Optional Accessibility dismissal
+
+Only a bundle built with `RIFT_MACOS_ACCESSIBILITY_NOTIFICATION_ACTIONS=1` can use Accessibility dismissal. After installing that bundle at its stable path, the user may explicitly add and enable **Rift Notification Extractor** under **System Settings → Privacy & Security → Accessibility**. The extractor never opens that pane or prompts during startup.
+
+Without this grant, notification synchronization remains functional and all macOS records remain non-dismissible. Capability is per record and dynamic: closed Notification Center, collapsed stacks, permission loss, ambiguity, or a missing individual Close action all advertise false.
+
 ## Request protocol
 
 One compact JSON object is accepted per authenticated XPC request, with a maximum request size of 64 KiB. The broker frames extraction requests as a single line only on its private worker stream.
@@ -71,6 +77,8 @@ One compact JSON object is accepted per authenticated XPC request, with a maximu
 {"id":"2","operation":"scanNotificationChanges","cursor":0}
 {"id":"3","operation":"rescanActiveNotifications"}
 ```
+
+The optional native broker surface adds `getNotificationActionBackendStatus`, `getNotificationActionCapabilities`, and `dismissNotification`. These operations are handled in-process and are never written to the worker stream. Their exact request and failure semantics are documented in [Experimental macOS Notification Actions](PrivateNotificationActions.md).
 
 Each response echoes the request ID and contains either `result` or a closed error object:
 
@@ -87,6 +95,6 @@ Expected status states are:
 
 The installed LaunchAgent owns the extractor app process, so TCC attributes FDA to that bundle rather than the daemon. The daemon reaches its certificate-pinned broker over the authenticated Mach service described in [Notification Extractor XPC](NotificationExtractorXpc.md). The broker launches a fresh worker for each extraction request, enforces a 10-second timeout, limits responses to 1 MiB, and rejects malformed or oversized responses. Database scans use private mode-`0600` snapshots. On startup the daemon advances its cursor without replaying historical records, then publishes only newly observed records. Rift-owned bundle identifiers are ignored to prevent mirrored notifications from being extracted and echoed back to peers.
 
-Current macOS data does not provide a validated dismissal lifecycle, so desktop-origin removals are not emitted in this phase. This is safer than treating retained `delivered.list` UUIDs as active and replaying stale notifications.
+The database still does not provide a validated natural-removal lifecycle, so unrelated desktop-origin removals are not emitted. A verified Accessibility action reports its own result, but Rift does not infer removals from retained `delivered.list` UUIDs or replay stale notification history.
 
 Authenticated XPC is the production transport boundary for the extractor. Seatbelt confinement remains separate follow-up hardening.
