@@ -33,6 +33,31 @@ class AndroidMediaArtworkPipelineTest {
     }
 
     @Test
+    fun failedEncodeCanBeRetried() {
+        val executor = QueuedExecutor()
+        val dispatcher = QueuedDispatcher()
+        var encodeCount = 0
+        val received = mutableListOf<String>()
+        val pipeline = pipeline(executor, dispatcher) { source ->
+            encodeCount += 1
+            if (encodeCount == 1) null else "encoded:$source"
+        }
+
+        pipeline.request("art", "source", "player", received::add)
+        executor.runAll()
+        dispatcher.runAll()
+        val failedLookup = pipeline.lookup("art")
+        pipeline.request("art", "source", "player", received::add)
+        executor.runAll()
+        dispatcher.runAll()
+
+        assertFalse(failedLookup.isCached)
+        assertEquals(2, encodeCount)
+        assertEquals(listOf("encoded:source"), received)
+        assertEquals(1, pipeline.cacheSize())
+    }
+
+    @Test
     fun stablePollingAfterArtworkCompletionDoesNoAdditionalWork() {
         val stats = MutableMediaObserverStats()
         val tracker = MediaSnapshotTracker(stats)

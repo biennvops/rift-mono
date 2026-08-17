@@ -59,25 +59,21 @@ internal class ArtworkPipeline<K, S, V : Any>(
     private val onEncodeCompleted: (V) -> Unit = {},
     private val onDiscarded: () -> Unit = {},
 ) {
-    private class CacheEntry<V : Any>(val value: V?)
-
     private class Work<V : Any> {
         val listenersByRequester = LinkedHashMap<String, (V) -> Unit>()
     }
 
-    private val cache = BoundedArtworkCache<K, CacheEntry<V>>(cacheEntries)
+    private val cache = BoundedArtworkCache<K, V>(cacheEntries)
     private val inFlightByKey = HashMap<K, Work<V>>()
 
     @Volatile
     private var active = true
 
     fun lookup(key: K): ArtworkCacheLookup<V> {
-        val entry = cache.get(key)
-        if (entry == null) {
-            return ArtworkCacheLookup(isCached = false, value = null)
-        }
+        val value = cache.get(key)
+            ?: return ArtworkCacheLookup(isCached = false, value = null)
         onCacheHit()
-        return ArtworkCacheLookup(isCached = true, value = entry.value)
+        return ArtworkCacheLookup(isCached = true, value = value)
     }
 
     fun retainRequesterForKey(requesterId: String, key: K?) {
@@ -101,7 +97,7 @@ internal class ArtworkPipeline<K, S, V : Any>(
         val cached = cache.get(key)
         if (cached != null) {
             onCacheHit()
-            cached.value?.let(onReady)
+            onReady(cached)
             return
         }
 
@@ -161,8 +157,8 @@ internal class ArtworkPipeline<K, S, V : Any>(
             return
         }
         inFlightByKey.remove(key)
-        cache.put(key, CacheEntry(encoded))
         if (encoded == null) return
+        cache.put(key, encoded)
 
         val listeners = work.listenersByRequester.values.toList()
         if (listeners.isEmpty()) {
