@@ -323,6 +323,74 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PeerSessionOnline_DoesNotReplayPlaybackRemovedDuringReplay()
+    {
+        const string peerDeviceId = "rift-peer";
+        var service = CreateService();
+        var localDeviceId = _identityManager.GetDeviceId();
+        _presenceService.UpdatePeerPresence(
+            peerDeviceId,
+            "online",
+            DateTimeOffset.UtcNow.ToString("O"),
+            ["media.playback"]);
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(localDeviceId, "playback-a", "Track A"),
+            CancellationToken.None);
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(localDeviceId, "playback-b", "Track B"),
+            CancellationToken.None);
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(localDeviceId, "playback-c", "Track C"),
+            CancellationToken.None);
+        var firstReplayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstReplay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replayCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transport.BeforeSendAsync = async envelope =>
+        {
+            if (!string.Equals(envelope.GetProperty("type").GetString(), "media.playbackPosted", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var playbackId = envelope.GetProperty("payload").GetProperty("playbackId").GetString();
+            if (string.Equals(playbackId, "playback-a", StringComparison.Ordinal))
+            {
+                firstReplayStarted.SetResult();
+                await releaseFirstReplay.Task;
+            }
+            else if (string.Equals(playbackId, "playback-c", StringComparison.Ordinal))
+            {
+                replayCompleted.SetResult();
+            }
+        };
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["media.playback"],
+            allowsProtectedTraffic: true));
+        await firstReplayStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var removal = service.HandleLocalPlaybackEventAsync(
+            "removed",
+            CreatePlayback(localDeviceId, "playback-b", "Track B"),
+            "2026-07-16T10:01:00Z",
+            CancellationToken.None);
+        releaseFirstReplay.SetResult();
+
+        await Task.WhenAll(removal, replayCompleted.Task).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains(
+            _transport.Payloads,
+            envelope => string.Equals(envelope.GetProperty("type").GetString(), "media.playbackRemoved", StringComparison.Ordinal) &&
+                string.Equals(envelope.GetProperty("payload").GetProperty("playbackId").GetString(), "playback-b", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            _transport.Payloads,
+            envelope => string.Equals(envelope.GetProperty("type").GetString(), "media.playbackPosted", StringComparison.Ordinal) &&
+                string.Equals(envelope.GetProperty("payload").GetProperty("playbackId").GetString(), "playback-b", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task PeerSessionOnline_DoesNotReplayWithoutProtectedMediaCapability()
     {
         var service = CreateService();
@@ -747,6 +815,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
         public List<JsonElement> Payloads { get; } = [];
+        public Func<JsonElement, Task>? BeforeSendAsync { get; set; }
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -765,12 +834,16 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
 
-        public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
+        public async Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(frameBody);
-            SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
-            Payloads.Add(document.RootElement.Clone());
-            return Task.CompletedTask;
+            var envelope = document.RootElement.Clone();
+            if (BeforeSendAsync is not null)
+            {
+                await BeforeSendAsync(envelope);
+            }
+            SentMessages.Add((peerDeviceId, envelope.GetProperty("type").GetString() ?? string.Empty));
+            Payloads.Add(envelope);
         }
 
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;

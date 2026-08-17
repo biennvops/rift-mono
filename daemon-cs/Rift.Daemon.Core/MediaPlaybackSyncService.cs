@@ -46,6 +46,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     };
     private readonly Lock _gate = new();
     private readonly Lock _artworkCacheGate = new();
+    private readonly SemaphoreSlim _playbackPublicationGate = new(1, 1);
     private readonly Dictionary<string, IReadOnlyDictionary<string, object?>> _artworkCache = new(Comparer);
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
@@ -172,17 +173,42 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             throw new InvalidOperationException("Removed media playback records cannot be published as active playback.");
         }
 
-        var normalized = NormalizeLocalRecord(playback);
-        ValidateRecord(normalized);
-        if (!_transport.HasProtectedSession(peerDeviceId))
+        await _playbackPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            throw new MediaPlaybackSyncFailureException($"Peer '{peerDeviceId}' does not have a protected session.", -32003);
-        }
+            var sourceDeviceId = string.IsNullOrWhiteSpace(playback.SourceDeviceId)
+                ? _identityManager.GetDeviceId()
+                : playback.SourceDeviceId;
+            MediaPlaybackRecord playbackToPublish = playback;
+            lock (_gate)
+            {
+                if (_playbacks.TryGetValue(GetPlaybackKey(sourceDeviceId, playback.PlaybackId), out var current))
+                {
+                    if (current.IsRemoved)
+                    {
+                        return;
+                    }
 
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(
-            "media.playbackPosted",
-            CreatePlaybackPayload(normalized))));
-        await _transport.SendAsync(peerDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+                    playbackToPublish = CloneRecord(current);
+                }
+            }
+
+            var normalized = NormalizeLocalRecord(playbackToPublish);
+            ValidateRecord(normalized);
+            if (!_transport.HasProtectedSession(peerDeviceId))
+            {
+                throw new MediaPlaybackSyncFailureException($"Peer '{peerDeviceId}' does not have a protected session.", -32003);
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(
+                "media.playbackPosted",
+                CreatePlaybackPayload(normalized))));
+            await _transport.SendAsync(peerDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _playbackPublicationGate.Release();
+        }
     }
 
     public async Task SendPeerErrorAsync(
@@ -1032,7 +1058,15 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             try
             {
                 var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(messageType, payload)));
-                await _transport.SendAsync(peer.DeviceId, bytes, cancellationToken).ConfigureAwait(false);
+                await _playbackPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await _transport.SendAsync(peer.DeviceId, bytes, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _playbackPublicationGate.Release();
+                }
                 sentTo.Add(peer.DeviceId);
             }
             catch (Exception ex)
