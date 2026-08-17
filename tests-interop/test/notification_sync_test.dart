@@ -1,7 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:daemon_dart/src/daemon.dart';
+import 'package:daemon_dart/src/interfaces/transport.dart';
+import 'package:daemon_dart/src/interfaces/trust_store.dart';
+import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:test/test.dart';
 
 const _iconA = <String, dynamic>{
@@ -75,6 +80,156 @@ void main() {
       }
     },
   );
+
+  for (final mode in <String>['direct', 'ipc']) {
+    test('Dart requester completes through C# $mode source executor', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'rift_notification_action_interop',
+      );
+      final transport = _RecordingTransport();
+      final daemon = RiftDaemon(
+        storagePath: tempDir.path,
+        port: 0,
+        enableDiscovery: false,
+        peerTransport: transport,
+        mediaPlaybackActionTimeout: const Duration(seconds: 10),
+      );
+
+      try {
+        await daemon.start();
+        const csharpDeviceId = 'rift-csharp-source';
+        await daemon.trustStoreForTesting.upsertPeer(
+          PeerRecord(
+            deviceId: csharpDeviceId,
+            certDer: Uint8List(32),
+            state: TrustState.trusted,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+        final context =
+            SessionContext(peerDeviceId: csharpDeviceId, isInitiator: false)
+              ..handshakeState = HandshakeState.established
+              ..trustState = TrustState.trusted
+              ..capabilityNegotiated = true
+              ..negotiatedCapabilities = [
+                Capability(name: 'notification.sync', version: 1),
+              ];
+        daemon.sessionManagerForTesting.injectContextForTesting(context);
+        await daemon.handleNotificationSyncProtocolMessageForTesting(
+          csharpDeviceId,
+          {
+            'type': 'notification.posted',
+            'payload': {
+              'notificationId': 'csharp-local-notification',
+              'sourceDeviceId': csharpDeviceId,
+              'sourcePlatform': 'interop',
+              'packageName': 'org.example.interop',
+              'appName': 'Interop Source',
+              'postedAt': '2026-08-10T00:00:00Z',
+              'isDismissible': true,
+              'isOpenable': false,
+            },
+          },
+        );
+
+        final action = await daemon.handleJsonRpcRequest({
+          'method': 'rift.performNotificationAction',
+          'params': {
+            'sourceDeviceId': csharpDeviceId,
+            'notificationId': 'csharp-local-notification',
+            'action': 'dismiss',
+          },
+        });
+        final requestEnvelope = transport.sentMessages.singleWhere(
+          (message) => message['type'] == 'notification.actionRequest',
+        );
+        final csharpResult = await _executeCSharpAction(
+          mode,
+          localDeviceId: csharpDeviceId,
+          requestEnvelope: requestEnvelope,
+        );
+
+        expect(csharpResult['mode'], mode);
+        expect(csharpResult['directExecutionCount'], mode == 'direct' ? 1 : 0);
+        if (mode == 'ipc') {
+          expect(csharpResult['requestId'], isNotEmpty);
+          expect(csharpResult['requestId'], isNot(action['operationId']));
+        } else {
+          expect(csharpResult['requestId'], isNull);
+        }
+        final resultEnvelope = Map<String, dynamic>.from(
+          csharpResult['actionResultEnvelope'] as Map,
+        );
+        final resultPayload = Map<String, dynamic>.from(
+          resultEnvelope['payload'] as Map,
+        );
+        expect(resultPayload['operationId'], action['operationId']);
+        expect(resultPayload['success'], isTrue);
+
+        await daemon.handleNotificationSyncProtocolMessageForTesting(
+          csharpDeviceId,
+          resultEnvelope,
+        );
+        final operation = await daemon.handleJsonRpcRequest({
+          'method': 'rift.getOperation',
+          'params': {'operationId': action['operationId']},
+        });
+        expect(operation['state'], 'Done');
+      } finally {
+        await daemon.stop();
+        await tempDir.delete(recursive: true);
+      }
+    });
+  }
+}
+
+class _RecordingTransport implements Transport {
+  final StreamController<TransportMessage> _messages =
+      StreamController<TransportMessage>.broadcast();
+  final StreamController<String> _disconnects =
+      StreamController<String>.broadcast();
+  final List<Map<String, dynamic>> sentMessages = <Map<String, dynamic>>[];
+
+  @override
+  Stream<TransportMessage> get onMessageReceived => _messages.stream;
+
+  @override
+  Stream<String> get onPeerDisconnected => _disconnects.stream;
+
+  @override
+  Future<String> connectTo(
+    String host,
+    int port, {
+    String? expectedDeviceId,
+    bool forceFreshSession = false,
+  }) async => expectedDeviceId ?? 'rift-csharp-source';
+
+  @override
+  void disconnect(String peerDeviceId) => _disconnects.add(peerDeviceId);
+
+  @override
+  Uint8List? getPeerCert(String peerDeviceId) => Uint8List(32);
+
+  @override
+  PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId) =>
+      const PeerSocketEndpoint(address: '127.0.0.1', port: 1);
+
+  @override
+  Future<void> sendMessage(String deviceId, Uint8List message) async {
+    sentMessages.add(jsonDecode(utf8.decode(message)) as Map<String, dynamic>);
+  }
+
+  @override
+  void setPeerAuthenticated(String peerDeviceId) {}
+
+  @override
+  Future<void> startServer() async {}
+
+  @override
+  Future<void> stopServer() async {
+    await _messages.close();
+    await _disconnects.close();
+  }
 }
 
 Map<String, dynamic> _notificationRecord(
@@ -92,6 +247,42 @@ Map<String, dynamic> _notificationRecord(
   'isOpenable': false,
   'icon': icon,
 };
+
+Future<Map<String, dynamic>> _executeCSharpAction(
+  String mode, {
+  required String localDeviceId,
+  required Map<String, dynamic> requestEnvelope,
+}) async {
+  final repoRoot = _findRepoRoot();
+  final process = await Process.start('dotnet', <String>[
+    'run',
+    '--project',
+    '${repoRoot.path}/tests-interop/runners/dotnet/Rift.NotificationInteropRunner.csproj',
+    '--configuration',
+    'Release',
+    '--',
+    'action',
+    mode,
+  ], workingDirectory: repoRoot.path);
+  process.stdin.write(
+    jsonEncode({
+      'localDeviceId': localDeviceId,
+      'requestEnvelope': requestEnvelope,
+    }),
+  );
+  await process.stdin.close();
+  final stdout = await process.stdout.transform(utf8.decoder).join();
+  final stderr = await process.stderr.transform(utf8.decoder).join();
+  final exitCode = await process.exitCode;
+  if (exitCode != 0) {
+    fail('C# action runner failed: $stderr\n$stdout');
+  }
+  final outputLines = const LineSplitter()
+      .convert(stdout)
+      .where((line) => line.trim().isNotEmpty)
+      .toList();
+  return Map<String, dynamic>.from(jsonDecode(outputLines.last) as Map);
+}
 
 Future<List<Map<String, dynamic>>> _normalizeWithCSharp(
   List<Map<String, dynamic>> records,

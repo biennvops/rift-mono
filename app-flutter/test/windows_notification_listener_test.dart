@@ -36,6 +36,8 @@ void main() {
               'iconBytes': <int>[1, 2, 3],
             },
           ];
+        case 'removeNotification':
+          return {'status': 'success'};
         case 'start':
         case 'stop':
           return true;
@@ -93,6 +95,164 @@ void main() {
         ]));
   });
 
+  test('propagates native snapshot failures', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'listActive') {
+        throw PlatformException(
+          code: 'notification_snapshot_failed',
+          message: 'snapshot failed',
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      platform.listActiveNotifications(),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'notification_snapshot_failed',
+        ),
+      ),
+    );
+  });
+
+  test('rejects malformed native snapshot responses', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+    for (final response in <Object>[
+      true,
+      <Object>[true]
+    ]) {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'listActive') {
+          return response;
+        }
+        return null;
+      });
+
+      await expectLater(
+        platform.listActiveNotifications(),
+        throwsA(isA<FormatException>()),
+      );
+    }
+  });
+
+  test('removes a valid notification through the native channel', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+
+    final result = await platform.removeNotification(812);
+
+    expect(result.status, WindowsNotificationRemovalStatus.success);
+    final removeCall = calls.singleWhere(
+      (call) => call.method == 'removeNotification',
+    );
+    expect(removeCall.arguments, {'userNotificationId': 812});
+  });
+
+  test('maps native removal statuses and malformed responses', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+    for (final entry in <String, WindowsNotificationRemovalStatus>{
+      'notFound': WindowsNotificationRemovalStatus.notFound,
+      'unavailable': WindowsNotificationRemovalStatus.unavailable,
+      'error': WindowsNotificationRemovalStatus.error,
+    }.entries) {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        switch (call.method) {
+          case 'getRuntimeStatus':
+            return {'supported': true, 'hasPackageIdentity': true};
+          case 'getAccessStatus':
+            return 'allowed';
+          case 'removeNotification':
+            return {'status': entry.key, 'message': 'bounded diagnostic'};
+          default:
+            return null;
+        }
+      });
+
+      final result = await platform.removeNotification(812);
+      expect(result.status, entry.value);
+      expect(result.message, 'bounded diagnostic');
+    }
+
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getRuntimeStatus':
+          return {'supported': true, 'hasPackageIdentity': true};
+        case 'getAccessStatus':
+          return 'allowed';
+        case 'removeNotification':
+          return true;
+        default:
+          return null;
+      }
+    });
+    expect(
+      (await platform.removeNotification(812)).status,
+      WindowsNotificationRemovalStatus.error,
+    );
+  });
+
+  test('remove fails closed for unsupported runtime and invalid IDs', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+
+    MethodChannelWindowsNotificationListener.debugIsWindowsOverride = false;
+    expect(
+      (await platform.removeNotification(812)).status,
+      WindowsNotificationRemovalStatus.unavailable,
+    );
+    expect(calls, isEmpty);
+
+    MethodChannelWindowsNotificationListener.debugIsWindowsOverride = true;
+    expect(
+      (await platform.removeNotification(-1)).status,
+      WindowsNotificationRemovalStatus.unavailable,
+    );
+    expect(
+      (await platform.removeNotification(0x100000000)).status,
+      WindowsNotificationRemovalStatus.unavailable,
+    );
+    expect(calls, isEmpty);
+  });
+
+  test('remove fails closed for unpackaged and denied access', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'getRuntimeStatus') {
+        return {'supported': true, 'hasPackageIdentity': false};
+      }
+      return null;
+    });
+
+    expect(
+      (await platform.removeNotification(812)).status,
+      WindowsNotificationRemovalStatus.unavailable,
+    );
+    expect(calls.map((call) => call.method),
+        isNot(contains('removeNotification')));
+
+    calls.clear();
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      switch (call.method) {
+        case 'getRuntimeStatus':
+          return {'supported': true, 'hasPackageIdentity': true};
+        case 'getAccessStatus':
+          return 'denied';
+        default:
+          return null;
+      }
+    });
+    expect(
+      (await platform.removeNotification(812)).status,
+      WindowsNotificationRemovalStatus.unavailable,
+    );
+    expect(calls.map((call) => call.method),
+        isNot(contains('removeNotification')));
+  });
+
   test('reports unsupported without invoking native methods', () async {
     MethodChannelWindowsNotificationListener.debugIsWindowsOverride = false;
     const platform = MethodChannelWindowsNotificationListener();
@@ -143,6 +303,14 @@ class _FakePlatform implements WindowsNotificationListenerPlatform {
   @override
   Future<List<Map<String, dynamic>>> listActiveNotifications() async =>
       const <Map<String, dynamic>>[];
+
+  @override
+  Future<WindowsNotificationRemovalResult> removeNotification(
+    int userNotificationId,
+  ) async =>
+      const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.success,
+      );
 
   @override
   Future<bool> start() async => true;

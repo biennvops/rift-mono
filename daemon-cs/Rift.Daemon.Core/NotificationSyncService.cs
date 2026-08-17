@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Interfaces;
@@ -9,14 +11,39 @@ namespace Rift.Daemon.Core;
 public sealed class NotificationSyncService : INotificationSyncService
 {
     private const string RequiredCapability = "notification.sync";
+    private static readonly StringComparer Comparer = StringComparer.Ordinal;
     private static readonly TimeSpan DefaultActionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly Regex Rfc3339UtcTimestamp = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$",
+        RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> FailureReasons = new(Comparer)
+    {
+        "PeerUnreachable",
+        "PeerRejected",
+        "OfferExpired",
+        "CapabilityUnavailable",
+        "ConnectionLost",
+        "Timeout",
+        "PolicyDenied",
+        "AuthenticationFailed",
+        "Unauthorized",
+        "HashMismatch",
+        "MalformedMessage",
+        "VersionMismatch",
+        "ProtocolError",
+        "PayloadTooLarge",
+        "InvalidTransition"
+    };
     private readonly Lock _gate = new();
+    private readonly Lock _windowsNotificationLifecycleGate = new();
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
     private readonly IOperationService _operationService;
     private readonly ISecurityEventLog _securityEventLog;
     private readonly IIpcNotificationService? _ipcNotificationService;
+    private readonly IIpcNotificationActionExecutorService? _notificationActionExecutorService;
+    private readonly ILocalNotificationActionHandler? _localActionHandler;
     private readonly INotificationSyncPolicyStore? _policyStore;
     private readonly ILogger<NotificationSyncService> _logger;
     private readonly TimeSpan _actionTimeout;
@@ -24,6 +51,9 @@ public sealed class NotificationSyncService : INotificationSyncService
     private readonly Dictionary<string, NotificationSyncObservedApp> _observedAppsByPackage = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingNotificationAction> _pendingActionsByOperationId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _pendingActionKeys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PendingIncomingNotificationAction> _pendingIncomingActionsByRequestId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Timer> _pendingIncomingActionTimers = new(StringComparer.Ordinal);
+    private Task _windowsNotificationLifecycleQueue = Task.CompletedTask;
     private NotificationSyncPolicy _policy;
 
     public NotificationSyncService(
@@ -35,7 +65,8 @@ public sealed class NotificationSyncService : INotificationSyncService
         IIpcNotificationService? ipcNotificationService = null,
         ILogger<NotificationSyncService>? logger = null,
         INotificationSyncPolicyStore? policyStore = null,
-        TimeSpan? actionTimeout = null)
+        TimeSpan? actionTimeout = null,
+        ILocalNotificationActionHandler? localActionHandler = null)
     {
         _transport = transport;
         _presenceService = presenceService;
@@ -43,9 +74,16 @@ public sealed class NotificationSyncService : INotificationSyncService
         _operationService = operationService;
         _securityEventLog = securityEventLog;
         _ipcNotificationService = ipcNotificationService;
+        _notificationActionExecutorService = ipcNotificationService as IIpcNotificationActionExecutorService;
+        if (_notificationActionExecutorService is not null)
+        {
+            _notificationActionExecutorService.ExecutorUnavailable += OnNotificationActionExecutorUnavailable;
+        }
+        _localActionHandler = localActionHandler;
         _policyStore = policyStore;
         _logger = logger ?? NullLogger<NotificationSyncService>.Instance;
         _actionTimeout = actionTimeout ?? DefaultActionTimeout;
+        _transport.SessionStateChanged += OnSessionStateChanged;
         _policy = policyStore?.Load() ?? new NotificationSyncPolicy
         {
             Enabled = true,
@@ -64,7 +102,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             {
                 Notifications = _notifications.Values
                     .Where(notification => !notification.IsRemoved)
-                    .Select(CloneRecord)
+                    .Select(notification => CloneRecord(notification))
                     .ToArray(),
                 ObservedApps = _observedAppsByPackage.Values
                     .OrderBy(app => app.AppName, StringComparer.Ordinal)
@@ -76,7 +114,30 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
-    public async Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+    public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+        string eventType,
+        NotificationSyncRecord notification,
+        string? removedAt,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(notification.SourcePlatform, "windows", StringComparison.OrdinalIgnoreCase))
+        {
+            return EnqueueWindowsNotificationLifecycleAsync(
+                () => HandleLocalNotificationEventCoreAsync(
+                    eventType,
+                    notification,
+                    removedAt,
+                    cancellationToken));
+        }
+
+        return HandleLocalNotificationEventCoreAsync(
+            eventType,
+            notification,
+            removedAt,
+            cancellationToken);
+    }
+
+    private async Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventCoreAsync(
         string eventType,
         NotificationSyncRecord notification,
         string? removedAt,
@@ -150,20 +211,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             string.Equals(normalizedEventType, "posted", StringComparison.Ordinal)
                 ? "notification.posted"
                 : "notification.updated",
-            new
-            {
-                notificationId = normalizedNotification.NotificationId,
-                sourceDeviceId = normalizedNotification.SourceDeviceId,
-                sourcePlatform = normalizedNotification.SourcePlatform,
-                packageName = normalizedNotification.PackageName,
-                appName = normalizedNotification.AppName,
-                title = normalizedNotification.Title,
-                bodyPreview = normalizedNotification.BodyPreview,
-                postedAt = normalizedNotification.PostedAt,
-                isDismissible = normalizedNotification.IsDismissible,
-                isOpenable = normalizedNotification.IsOpenable,
-                icon = normalizedNotification.Icon
-            },
+            CreateNotificationPayload(normalizedNotification),
             cancellationToken).ConfigureAwait(false);
 
         return new NotifyLocalNotificationEventResult
@@ -464,20 +512,403 @@ public sealed class NotificationSyncService : INotificationSyncService
         }).ConfigureAwait(false);
     }
 
-    private void EnsureActionAllowed(NotificationSyncRecord notification, string action)
+    public async Task HandleNotificationActionRequestAsync(
+        NotificationActionRequestRecord request,
+        CancellationToken cancellationToken)
     {
-        var allowed = action switch
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(request.OperationId) ||
+            string.IsNullOrWhiteSpace(request.NotificationId) ||
+            string.IsNullOrWhiteSpace(request.SourceDeviceId) ||
+            string.IsNullOrWhiteSpace(request.RequestingDeviceId))
         {
-            "open" => notification.IsOpenable,
-            "dismiss" => notification.IsDismissible,
-            _ => false
+            throw new InvalidOperationException(
+                "notification.actionRequest requires operationId, notificationId, sourceDeviceId, and requestingDeviceId.");
+        }
+        if (!string.Equals(request.SourceDeviceId, _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException(
+                "notification.actionRequest sourceDeviceId did not match the local device identity.");
+        }
+
+        ValidateOptionalAuditTimestamp(request.RequestedAt, "requestedAt");
+        if (!TryNormalizeAction(request.Action, out var action))
+        {
+            await SendIncomingActionResultAsync(
+                CreatePendingIncomingAction(request, request.Action),
+                success: false,
+                failureReason: "ProtocolError",
+                message: "Unknown notification action.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        NotificationSyncRecord? notification;
+        lock (_gate)
+        {
+            _notifications.TryGetValue(
+                GetNotificationKey(request.SourceDeviceId, request.NotificationId),
+                out notification);
+        }
+
+        var pending = CreatePendingIncomingAction(request, action);
+        if (notification is null || notification.IsRemoved)
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "CapabilityUnavailable",
+                message: "The local notification was not found.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        if (!IsActionAllowed(notification, action))
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "PolicyDenied",
+                message: $"The local notification does not allow action '{action}'.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (_localActionHandler is not null)
+        {
+            if (!_localActionHandler.CanPerform(notification, action))
+            {
+                await SendIncomingActionResultAsync(
+                    pending,
+                    success: false,
+                    failureReason: "CapabilityUnavailable",
+                    message: "No daemon-resident notification handler can perform the request.",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            LocalNotificationActionResult result;
+            try
+            {
+                result = await _localActionHandler.PerformAsync(notification, action, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Local notification action handler failed for {Action} on {NotificationId}.",
+                    action,
+                    request.NotificationId);
+                result = new LocalNotificationActionResult
+                {
+                    Success = false,
+                    FailureReason = "CapabilityUnavailable",
+                    Message = ex.Message
+                };
+            }
+
+            await SendIncomingActionResultAsync(
+                pending,
+                result.Success,
+                NormalizeFailureReason(result.Success, result.FailureReason, invalidErrorCode: null),
+                LimitMessage(result.Message),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (_notificationActionExecutorService is null ||
+            !_notificationActionExecutorService.HasExecutor)
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "CapabilityUnavailable",
+                message: "No local notification action client is connected.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        lock (_gate)
+        {
+            _pendingIncomingActionsByRequestId[pending.RequestId] = pending;
+            _pendingIncomingActionTimers[pending.RequestId] = new Timer(
+                _ => _ = ExpireIncomingActionAsync(pending.RequestId),
+                null,
+                _actionTimeout,
+                Timeout.InfiniteTimeSpan);
+        }
+
+        var delivered = await _notificationActionExecutorService.NotifyExecutorAsync(
+            "rift.onNotificationActionRequest",
+            new
+            {
+                requestId = pending.RequestId,
+                operationId = pending.OperationId,
+                notificationId = pending.NotificationId,
+                sourceDeviceId = pending.SourceDeviceId,
+                requestingDeviceId = pending.RequestingDeviceId,
+                action = pending.Action,
+                requestedAt = request.RequestedAt
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (delivered)
+        {
+            return;
+        }
+
+        var removed = false;
+        lock (_gate)
+        {
+            removed = _pendingIncomingActionsByRequestId.Remove(pending.RequestId);
+            if (_pendingIncomingActionTimers.Remove(pending.RequestId, out var timer))
+            {
+                timer.Dispose();
+            }
+        }
+
+        if (removed)
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "CapabilityUnavailable",
+                message: "No local notification action client is connected.",
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<ReportHandledNotificationActionResult> ReportHandledNotificationActionAsync(
+        string requestId,
+        bool success,
+        string? failureReason,
+        string? message,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(requestId))
+        {
+            throw new NotificationSyncFailureException("A notification action request ID is required.", -32009);
+        }
+
+        failureReason = NormalizeFailureReason(success, failureReason, invalidErrorCode: -32602);
+        PendingIncomingNotificationAction pending;
+        lock (_gate)
+        {
+            if (!_pendingIncomingActionsByRequestId.Remove(requestId, out pending!))
+            {
+                throw new NotificationSyncFailureException(
+                    $"Notification action request '{requestId}' was not found.",
+                    -32009);
+            }
+            if (_pendingIncomingActionTimers.Remove(requestId, out var timer))
+            {
+                timer.Dispose();
+            }
+        }
+
+        try
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success,
+                failureReason,
+                LimitMessage(message),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new NotificationSyncFailureException(
+                $"Failed to send notification action result: {ex.Message}",
+                -32003);
+        }
+
+        await LogEventAsync(
+            SecurityEventTypes.NotificationActioned,
+            pending.RequestingDeviceId,
+            success ? SecurityEventOutcome.Success : SecurityEventOutcome.Failure,
+            failureReason,
+            new Dictionary<string, object?>
+            {
+                ["notificationId"] = pending.NotificationId,
+                ["action"] = pending.Action,
+                ["operationId"] = pending.OperationId,
+                ["requestId"] = requestId,
+                ["direction"] = "incoming"
+            }).ConfigureAwait(false);
+
+        return new ReportHandledNotificationActionResult
+        {
+            RequestId = requestId,
+            NotificationId = pending.NotificationId,
+            Action = pending.Action,
+            Success = success
+        };
+    }
+
+    private static PendingIncomingNotificationAction CreatePendingIncomingAction(
+        NotificationActionRequestRecord request,
+        string action) => new()
+        {
+            RequestId = Guid.NewGuid().ToString("D"),
+            OperationId = request.OperationId,
+            NotificationId = request.NotificationId,
+            SourceDeviceId = request.SourceDeviceId,
+            RequestingDeviceId = request.RequestingDeviceId,
+            Action = action
         };
 
-        if (!allowed)
+    private static bool IsActionAllowed(NotificationSyncRecord notification, string action) => action switch
+    {
+        "open" => notification.IsOpenable,
+        "dismiss" => notification.IsDismissible,
+        _ => false
+    };
+
+    private void EnsureActionAllowed(NotificationSyncRecord notification, string action)
+    {
+        if (!IsActionAllowed(notification, action))
         {
             throw new NotificationSyncFailureException(
                 $"Mirrored notification '{notification.NotificationId}' does not allow action '{action}'.",
                 -32010);
+        }
+    }
+
+    private Task<T> EnqueueWindowsNotificationLifecycleAsync<T>(Func<Task<T>> operation)
+    {
+        Task predecessor;
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_windowsNotificationLifecycleGate)
+        {
+            predecessor = _windowsNotificationLifecycleQueue;
+            _windowsNotificationLifecycleQueue = completion.Task;
+        }
+
+        _ = CompleteWindowsNotificationLifecycleAsync(predecessor, operation, completion);
+        return completion.Task;
+    }
+
+    private Task EnqueueWindowsNotificationLifecycleAsync(Func<Task> operation) =>
+        EnqueueWindowsNotificationLifecycleAsync<object?>(async () =>
+        {
+            await operation().ConfigureAwait(false);
+            return null;
+        });
+
+    private static async Task CompleteWindowsNotificationLifecycleAsync<T>(
+        Task predecessor,
+        Func<Task<T>> operation,
+        TaskCompletionSource<T> completion)
+    {
+        try
+        {
+            await predecessor.ConfigureAwait(false);
+        }
+        catch
+        {
+            // A failed event must not poison later Windows lifecycle transitions.
+        }
+
+        try
+        {
+            completion.TrySetResult(await operation().ConfigureAwait(false));
+        }
+        catch (OperationCanceledException ex)
+        {
+            completion.TrySetCanceled(ex.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            completion.TrySetException(ex);
+        }
+    }
+
+    private void OnNotificationActionExecutorUnavailable(object? sender, EventArgs args)
+    {
+        _ = EnqueueWindowsNotificationLifecycleAsync(InvalidateNotificationActionCapabilitiesAsync);
+    }
+
+    private async Task InvalidateNotificationActionCapabilitiesAsync()
+    {
+        NotificationSyncRecord[] downgraded;
+        var localDeviceId = _identityManager.GetDeviceId();
+        lock (_gate)
+        {
+            var keys = _notifications
+                .Where(entry =>
+                    !entry.Value.IsRemoved &&
+                    string.Equals(entry.Value.SourceDeviceId, localDeviceId, StringComparison.Ordinal) &&
+                    string.Equals(entry.Value.SourcePlatform, "windows", StringComparison.OrdinalIgnoreCase) &&
+                    (entry.Value.IsDismissible || entry.Value.IsOpenable))
+                .Select(entry => entry.Key)
+                .ToArray();
+            downgraded = new NotificationSyncRecord[keys.Length];
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var updated = CloneRecord(
+                    _notifications[keys[index]],
+                    isDismissible: false,
+                    isOpenable: false);
+                _notifications[keys[index]] = updated;
+                downgraded[index] = CloneRecord(updated);
+            }
+        }
+
+        foreach (var notification in downgraded)
+        {
+            await PublishExecutorCapabilityDowngradeAsync(notification).ConfigureAwait(false);
+        }
+    }
+
+    private async Task PublishExecutorCapabilityDowngradeAsync(NotificationSyncRecord notification)
+    {
+        try
+        {
+            await NotifyIpcAsync("rift.onNotificationUpdated", notification).ConfigureAwait(false);
+            await BroadcastNotificationAsync(
+                "notification.updated",
+                CreateNotificationPayload(notification),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish notification action capability loss for {NotificationId}.",
+                notification.NotificationId);
+        }
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (args.IsOnline)
+        {
+            return;
+        }
+
+        Timer[] timers;
+        lock (_gate)
+        {
+            var requestIds = _pendingIncomingActionsByRequestId
+                .Where(entry => string.Equals(
+                    entry.Value.RequestingDeviceId,
+                    args.PeerDeviceId,
+                    StringComparison.Ordinal))
+                .Select(entry => entry.Key)
+                .ToArray();
+            timers = requestIds
+                .Select(requestId => _pendingIncomingActionTimers.Remove(requestId, out var timer) ? timer : null)
+                .Where(timer => timer is not null)
+                .Cast<Timer>()
+                .ToArray();
+            foreach (var requestId in requestIds)
+            {
+                _pendingIncomingActionsByRequestId.Remove(requestId);
+            }
+        }
+
+        foreach (var timer in timers)
+        {
+            timer.Dispose();
         }
     }
 
@@ -549,24 +980,95 @@ public sealed class NotificationSyncService : INotificationSyncService
 
     private static string NormalizeAction(string action)
     {
-        if (string.Equals(action, "open", StringComparison.Ordinal))
+        if (TryNormalizeAction(action, out var normalized))
         {
-            return "open";
-        }
-
-        if (string.Equals(action, "dismiss", StringComparison.Ordinal))
-        {
-            return "dismiss";
+            return normalized;
         }
 
         throw new NotificationSyncFailureException($"Unknown notification action '{action}'.", -32010);
     }
+
+    private static bool TryNormalizeAction(string action, out string normalized)
+    {
+        if (string.Equals(action, "open", StringComparison.Ordinal))
+        {
+            normalized = "open";
+            return true;
+        }
+
+        if (string.Equals(action, "dismiss", StringComparison.Ordinal))
+        {
+            normalized = "dismiss";
+            return true;
+        }
+
+        normalized = string.Empty;
+        return false;
+    }
+
+    private static string? NormalizeFailureReason(
+        bool success,
+        string? failureReason,
+        int? invalidErrorCode)
+    {
+        if (failureReason is not null)
+        {
+            if (FailureReasons.Contains(failureReason))
+            {
+                return success ? null : failureReason;
+            }
+            if (invalidErrorCode.HasValue)
+            {
+                throw new NotificationSyncFailureException(
+                    $"Invalid failureReason '{failureReason}'.",
+                    invalidErrorCode.Value);
+            }
+            return success ? null : "PeerRejected";
+        }
+
+        return success ? null : "PeerRejected";
+    }
+
+    private static void ValidateOptionalAuditTimestamp(string? value, string fieldName)
+    {
+        if (value is not null &&
+            (!Rfc3339UtcTimestamp.IsMatch(value) ||
+             !DateTimeOffset.TryParse(
+                 value,
+                 CultureInfo.InvariantCulture,
+                 DateTimeStyles.None,
+                 out var timestamp) ||
+             timestamp.Offset != TimeSpan.Zero))
+        {
+            throw new NotificationSyncFailureException(
+                $"{fieldName} must be a full RFC 3339 UTC timestamp.",
+                -32602);
+        }
+    }
+
+    private static string? LimitMessage(string? message) =>
+        message is null || message.Length <= 1024 ? message : message[..1024];
 
     private static string GetNotificationKey(string sourceDeviceId, string notificationId) =>
         $"{sourceDeviceId}\n{notificationId}";
 
     private static string GetPendingActionKey(string sourceDeviceId, string notificationId, string action) =>
         $"{sourceDeviceId}\n{notificationId}\n{action}";
+
+    private static object CreateNotificationPayload(NotificationSyncRecord notification) => new
+    {
+        notificationId = notification.NotificationId,
+        sourceDeviceId = notification.SourceDeviceId,
+        sourcePlatform = notification.SourcePlatform,
+        packageName = notification.PackageName,
+        appName = notification.AppName,
+        title = notification.Title,
+        bodyPreview = notification.BodyPreview,
+        postedAt = notification.PostedAt,
+        isDismissible = notification.IsDismissible,
+        isOpenable = notification.IsOpenable,
+        icon = notification.Icon
+    };
 
     private object CreateEnvelope(string type, object payload) => new
     {
@@ -576,6 +1078,60 @@ public sealed class NotificationSyncService : INotificationSyncService
         sourceDeviceId = _identityManager.GetDeviceId(),
         payload
     };
+
+    private async Task SendIncomingActionResultAsync(
+        PendingIncomingNotificationAction pending,
+        bool success,
+        string? failureReason,
+        string? message,
+        CancellationToken cancellationToken)
+    {
+        var envelope = CreateEnvelope(
+            "notification.actionResult",
+            new
+            {
+                operationId = pending.OperationId,
+                notificationId = pending.NotificationId,
+                sourceDeviceId = pending.SourceDeviceId,
+                requestingDeviceId = pending.RequestingDeviceId,
+                action = pending.Action,
+                success,
+                failureReason,
+                message
+            });
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+        await _transport.SendAsync(pending.RequestingDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ExpireIncomingActionAsync(string requestId)
+    {
+        PendingIncomingNotificationAction? pending;
+        lock (_gate)
+        {
+            if (!_pendingIncomingActionsByRequestId.Remove(requestId, out pending))
+            {
+                return;
+            }
+            if (_pendingIncomingActionTimers.Remove(requestId, out var timer))
+            {
+                timer.Dispose();
+            }
+        }
+
+        try
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "Timeout",
+                message: "The local notification action client did not handle the request.",
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to expire incoming notification action {RequestId}.", requestId);
+        }
+    }
 
     private IReadOnlyDictionary<string, object?> CreateOperationDetails(NotificationSyncRecord notification, string action) =>
         new Dictionary<string, object?>
@@ -655,10 +1211,8 @@ public sealed class NotificationSyncService : INotificationSyncService
             Title = notification.Title,
             BodyPreview = notification.BodyPreview,
             PostedAt = notification.PostedAt,
-            // Desktop hosts have no native notification action executor, so locally
-            // originating records must not advertise actions this daemon cannot run.
-            IsDismissible = false,
-            IsOpenable = false,
+            IsDismissible = notification.IsDismissible,
+            IsOpenable = notification.IsOpenable,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
             Icon = NormalizeNotificationIcon(notification.Icon, notification.NotificationId)
@@ -757,7 +1311,10 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
-    private static NotificationSyncRecord CloneRecord(NotificationSyncRecord notification)
+    private static NotificationSyncRecord CloneRecord(
+        NotificationSyncRecord notification,
+        bool? isDismissible = null,
+        bool? isOpenable = null)
     {
         return new NotificationSyncRecord
         {
@@ -769,8 +1326,8 @@ public sealed class NotificationSyncService : INotificationSyncService
             Title = notification.Title,
             BodyPreview = notification.BodyPreview,
             PostedAt = notification.PostedAt,
-            IsDismissible = notification.IsDismissible,
-            IsOpenable = notification.IsOpenable,
+            IsDismissible = isDismissible ?? notification.IsDismissible,
+            IsOpenable = isOpenable ?? notification.IsOpenable,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
             Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)

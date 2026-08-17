@@ -30,7 +30,8 @@ internal sealed record LinuxNotificationPostedReply(
 
 internal sealed record LinuxNotificationClosed(
     string Sender,
-    uint NotificationId) : LinuxNotificationBusEvent;
+    uint NotificationId,
+    uint Reason) : LinuxNotificationBusEvent;
 
 internal sealed class LinuxFreedesktopNotificationMonitor(
     ILogger<LinuxFreedesktopNotificationMonitor> logger) : ILinuxNotificationMonitor
@@ -186,7 +187,10 @@ internal static class LinuxFreedesktopNotificationMessageParser
                 string.Equals(message.SignatureAsString, NotificationClosedSignature, StringComparison.Ordinal))
             {
                 var reader = message.GetBodyReader();
-                parsed = new LinuxNotificationClosed(message.SenderAsString ?? string.Empty, reader.ReadUInt32());
+                parsed = new LinuxNotificationClosed(
+                    message.SenderAsString ?? string.Empty,
+                    reader.ReadUInt32(),
+                    reader.ReadUInt32());
                 return true;
             }
         }
@@ -204,6 +208,8 @@ internal sealed class LinuxNotificationSyncObserver(
     ILinuxNotificationMonitor monitor,
     INotificationSyncService notificationSyncService,
     IIdentityManager identityManager,
+    LinuxNotificationRegistry registry,
+    ILinuxNotificationControl control,
     ILogger<LinuxNotificationSyncObserver> logger) : BackgroundService
 {
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
@@ -320,13 +326,31 @@ internal sealed class LinuxNotificationSyncObserver(
             if (isUpdate && replacementKey != keyForNotification)
             {
                 _activeNotifications.Remove(replacementKey);
+                registry.Remove(CreateNotificationId(serverOwner, call.ReplacesId));
             }
             _activeNotifications[keyForNotification] = call;
         }
 
+        var notificationId = CreateNotificationId(serverOwner, reply.NotificationId);
+        var target = new LinuxNotificationTarget(
+            notificationId,
+            serverOwner,
+            reply.NotificationId);
+        var hasStableControlTarget =
+            control.IsAvailable &&
+            reply.Sender.StartsWith(":", StringComparison.Ordinal);
+        if (hasStableControlTarget)
+        {
+            registry.Register(target);
+        }
+        else
+        {
+            registry.Remove(notificationId);
+        }
+
         var notification = new NotificationSyncRecord
         {
-            NotificationId = CreateNotificationId(serverOwner, reply.NotificationId),
+            NotificationId = notificationId,
             SourceDeviceId = identityManager.GetDeviceId(),
             SourcePlatform = "linux",
             PackageName = GetPackageName(call),
@@ -334,7 +358,7 @@ internal sealed class LinuxNotificationSyncObserver(
             Title = LimitPreview(call.Summary, 256),
             BodyPreview = LimitPreview(call.Body, 1024),
             PostedAt = call.ReceivedAt.ToUniversalTime().ToString("O"),
-            IsDismissible = false,
+            IsDismissible = hasStableControlTarget,
             IsOpenable = false
         };
 
@@ -354,6 +378,11 @@ internal sealed class LinuxNotificationSyncObserver(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            registry.Remove(notification.NotificationId);
+            lock (_gate)
+            {
+                _activeNotifications.Remove(keyForNotification);
+            }
             logger.LogWarning(ex, "Failed to publish Linux notification {NotificationId}.", notification.NotificationId);
         }
     }
@@ -375,6 +404,7 @@ internal sealed class LinuxNotificationSyncObserver(
         }
 
         var notificationId = CreateNotificationId(serverOwner, closed.NotificationId);
+        registry.Remove(notificationId);
         try
         {
             var result = await notificationSyncService.HandleLocalNotificationEventAsync(
@@ -388,7 +418,8 @@ internal sealed class LinuxNotificationSyncObserver(
                 DateTimeOffset.UtcNow.ToString("O"),
                 cancellationToken).ConfigureAwait(false);
             logger.LogInformation(
-                "Linux notification removed (broadcastPeers={BroadcastPeerCount}).",
+                "Linux notification removed (reason={Reason}, broadcastPeers={BroadcastPeerCount}).",
+                closed.Reason,
                 result.BroadcastTo.Count);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

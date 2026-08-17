@@ -1624,6 +1624,7 @@ public sealed class FileTransferServiceTests : IDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public List<(string Method, object Parameters)> Notifications { get; } = [];
+        public bool HasClients => true;
         public bool BlockTransferFailedNotification { get; set; }
         public Task TransferFailedNotificationEntered => _transferFailedNotificationEntered.Task;
 

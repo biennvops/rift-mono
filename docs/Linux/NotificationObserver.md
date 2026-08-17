@@ -18,7 +18,13 @@ Applications that publish notifications only through a desktop portal may not be
 
 Rift uses the `desktop-entry` hint as `packageName` when available and falls back to the notification's application name. It mirrors only the application identity, title, bounded body preview, receipt timestamp, and source-scoped notification ID. Icons, custom hints, inline reply, and arbitrary notification actions are omitted.
 
-Linux-origin notifications advertise `isDismissible: false` and `isOpenable: false`. There is no portable and safe v1 mapping from a remote Rift action to an arbitrary source application's notification action.
+## Source actions
+
+After a `Notify` reply establishes a stable native target, Linux-origin notifications advertise `isDismissible: true` and `isOpenable: false` while the user-session D-Bus control path is available. `isDismissible` describes the source daemon's ability to execute Dismiss for that exact notification; it is not inferred from the Linux platform name.
+
+A remote Dismiss resolves the full Rift identity `linux:<notification-server-owner>:<native-id>`. The daemon atomically marks the target as closing, verifies the current owner of `org.freedesktop.Notifications` with `org.freedesktop.DBus.GetNameOwner`, and sends `CloseNotification(uint32)` to the verified unique owner. If the server owner changed, the daemon does not close anything and returns `CapabilityUnavailable`; this prevents a restarted server from reusing a native integer ID for an unrelated notification. Only one concurrent close is allowed for a target, and a failed native close restores it to active.
+
+A successful `CloseNotification` produces `notification.actionResult`; it does not synthesize source removal. The normal `NotificationClosed(id, reason)` signal remains authoritative, removes the registry target, and produces one `notification.removed` event. Open, reply, and arbitrary notification actions remain unsupported.
 
 ## Privacy and loop prevention
 

@@ -17,10 +17,15 @@ builder.Services.AddSingleton<ILinuxMprisArtworkLoader, LinuxMprisArtworkLoader>
 builder.Services.AddSingleton<ILinuxMprisClient, LinuxMprisClient>();
 builder.Services.AddSingleton<ILinuxMprisRemotePlayer, LinuxMprisRemotePlayer>();
 builder.Services.AddSingleton<ILinuxNotificationMonitor, LinuxFreedesktopNotificationMonitor>();
+builder.Services.AddSingleton<LinuxNotificationRegistry>();
+builder.Services.AddSingleton<ILinuxNotificationControl, LinuxFreedesktopNotificationControl>();
+builder.Services.AddSingleton<LinuxNotificationActionHandler>();
 builder.Services.AddSingleton<LinuxMediaPlaybackService>();
 builder.Services.AddHostedService<LinuxNotificationSyncObserver>();
 builder.Services.AddSingleton<ILocalMediaPlaybackActionHandler>(sp =>
     sp.GetRequiredService<LinuxMediaPlaybackService>());
+builder.Services.AddSingleton<ILocalNotificationActionHandler>(sp =>
+    sp.GetRequiredService<LinuxNotificationActionHandler>());
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

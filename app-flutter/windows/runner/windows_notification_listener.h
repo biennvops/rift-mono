@@ -47,6 +47,8 @@ class WindowsNotificationListener {
   void GetAccessStatus(std::unique_ptr<MethodResult> result);
   void RequestAccess(std::unique_ptr<MethodResult> result);
   void ListActive(std::unique_ptr<MethodResult> result);
+  void RemoveNotification(const EncodableValue* arguments,
+                          std::unique_ptr<MethodResult> result);
   void Start(std::unique_ptr<MethodResult> result);
   void Stop(std::unique_ptr<MethodResult> result);
 
@@ -79,6 +81,7 @@ class WindowsNotificationListener {
       std::shared_ptr<State> state,
       uint64_t generation,
       winrt::Windows::UI::Notifications::UserNotification notification,
+      bool include_filtered,
       NotificationCallback callback);
 
   flutter::BinaryMessenger* messenger_;

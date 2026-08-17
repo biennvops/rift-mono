@@ -772,7 +772,7 @@ Requests a remote action against a mirrored notification when the source marked 
 
 `sourceDeviceId` is required because `notificationId` is only unique within its source device. Actions are always resolved through the composite `(sourceDeviceId, notificationId)` identity.
 
-Action availability is controlled by the mirrored record's `isDismissible` and `isOpenable` flags. Android-origin records currently advertise only `dismiss`; remote `open` is not supported for Android sources.
+Action availability is controlled by the mirrored record's `isDismissible` and `isOpenable` flags. These flags describe actions the source device can currently execute for that exact notification, not general platform support. Android, Linux, and Windows source records currently advertise only `dismiss` when their local executor is available; remote `open` is not supported on those sources.
 
 **Result:**
 
@@ -788,11 +788,27 @@ Action availability is controlled by the mirrored record's `isDismissible` and `
 
 **Errors:** `-32003` if the source peer cannot currently perform notification sync or actions, `-32009` if `(sourceDeviceId, notificationId)` does not exist, `-32010` if the notification does not allow the requested action.
 
+#### `rift.acquireNotificationActionExecutor`
+
+Claims the connection-scoped local notification-action executor lease. The first connected client to claim the lease receives `rift.onNotificationActionRequest`; later clients receive `{ "acquired": false }` and MUST NOT advertise local notification actions. Repeated acquisition by the owner is idempotent. An otherwise eligible client that receives `{ "acquired": false }` SHOULD retry periodically, revalidating its native prerequisites before each attempt, so an already-connected standby can take over after the owner exits. The daemon releases the lease when that IPC connection closes and MUST invalidate action capabilities on local records that depended on the lost executor. Owner-loss invalidation and actionable local record updates from a successor MUST be serialized so a delayed downgrade cannot overwrite restored capability.
+
+**Params:** none.
+
+**Result:** `{ "acquired": true }` when this connection owns the lease, otherwise `{ "acquired": false }`.
+
+#### `rift.releaseNotificationActionExecutor`
+
+Releases the notification-action executor lease owned by this IPC connection. Non-owners receive `{ "released": false }`.
+
+**Params:** none.
+
+**Result:** `{ "released": true }` when this connection released the lease, otherwise `{ "released": false }`.
+
 #### `rift.reportLocalNotificationActionHandled`
 
-Reports the outcome of an action previously delivered through `rift.onNotificationActionRequest`.
+Reports the outcome of an action previously delivered through `rift.onNotificationActionRequest`. The local `requestId` is distinct from the peer protocol `operationId`; the daemon preserves the peer operation correlation when it emits `notification.actionResult`.
 
-**Params:** `requestId` string, `success` boolean, optional `failureReason` failure reason, optional `message` string.
+**Params:** `requestId` string, `success` boolean, optional `failureReason` failure reason, optional `message` string. `failureReason` is ignored for success and MUST use the protocol's closed vocabulary for failure. The first valid report atomically completes the request; pending requests expire after at most 30 seconds.
 
 **Errors:** `-32009` if `requestId` is unknown or already completed.
 
@@ -834,7 +850,7 @@ Package identifiers are trimmed, empty values are removed, duplicates are remove
 
 Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers, including desktop and Android sinks.
 
-`posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
+`posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. The action flags describe what the submitting source adapter can currently execute for that exact notification and are preserved by the daemon after validation. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
 
 `icon` is optional presentation metadata. When present, it MUST contain exactly the canonical fields `{ "mediaType": "image/png", "dataBase64": "...", "byteSize": 38142, "sha256": "64-lowercase-hex" }`; decoded bytes must be a structurally valid, CRC-consistent PNG no larger than 512×512 pixels, are capped at 131072 bytes, and the Base64 string is rejected above 174764 characters before decoding. The digest covers the exact PNG bytes. The IPC client receives lowerCamelCase fields. Invalid, oversized, over-dimensioned, or extra-field icons are ignored without rejecting the notification.
 

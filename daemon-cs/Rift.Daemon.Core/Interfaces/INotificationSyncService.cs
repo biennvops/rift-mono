@@ -110,6 +110,34 @@ public sealed class NotificationActionResultRecord
     public string? Message { get; init; }
 }
 
+public sealed class NotificationActionRequestRecord
+{
+    public string OperationId { get; init; } = string.Empty;
+    public string NotificationId { get; init; } = string.Empty;
+    public string SourceDeviceId { get; init; } = string.Empty;
+    public string RequestingDeviceId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public string? RequestedAt { get; init; }
+}
+
+public sealed class PendingIncomingNotificationAction
+{
+    public string RequestId { get; init; } = string.Empty;
+    public string OperationId { get; init; } = string.Empty;
+    public string NotificationId { get; init; } = string.Empty;
+    public string SourceDeviceId { get; init; } = string.Empty;
+    public string RequestingDeviceId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+}
+
+public sealed class ReportHandledNotificationActionResult
+{
+    public string RequestId { get; init; } = string.Empty;
+    public string NotificationId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public bool Success { get; init; }
+}
+
 public interface INotificationSyncService
 {
     Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
@@ -139,4 +167,13 @@ public interface INotificationSyncService
     Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken);
 
     Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken);
+
+    Task HandleNotificationActionRequestAsync(NotificationActionRequestRecord request, CancellationToken cancellationToken);
+
+    Task<ReportHandledNotificationActionResult> ReportHandledNotificationActionAsync(
+        string requestId,
+        bool success,
+        string? failureReason,
+        string? message,
+        CancellationToken cancellationToken);
 }

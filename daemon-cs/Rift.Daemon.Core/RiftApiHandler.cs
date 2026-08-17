@@ -604,6 +604,28 @@ public class RiftApiHandler : IRiftApi
         }
     }
 
+    [JsonRpcMethod("rift.reportLocalNotificationActionHandled")]
+    public async Task<ReportHandledNotificationActionResult> ReportLocalNotificationActionHandledAsync(
+        string requestId,
+        bool success,
+        string? failureReason = null,
+        string? message = null)
+    {
+        try
+        {
+            return await _notificationSyncService.ReportHandledNotificationActionAsync(
+                requestId,
+                success,
+                failureReason,
+                message,
+                CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.updateNotificationSyncPolicy")]
     public async Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
         bool enabled,
@@ -889,6 +911,10 @@ public class RiftApiHandler : IRiftApi
         public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationActionRequestAsync(NotificationActionRequestRecord request, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<ReportHandledNotificationActionResult> ReportHandledNotificationActionAsync(string requestId, bool success, string? failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         private static LocalRpcException CreateNotConfiguredException()
         {

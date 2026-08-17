@@ -200,6 +200,12 @@ class MockTransport implements IpcTransport {
     'Action': 'open',
     'State': 'Pending',
   };
+  Map<String, dynamic> acquireNotificationActionExecutorResult = {
+    'acquired': true,
+  };
+  Map<String, dynamic> releaseNotificationActionExecutorResult = {
+    'released': true,
+  };
   Map<String, dynamic> updateNotificationSyncPolicyResult = {
     'Enabled': true,
     'Mode': 'exclude',
@@ -353,6 +359,12 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.performNotificationAction':
           _sendResult(id, performNotificationActionResult);
+          break;
+        case 'rift.acquireNotificationActionExecutor':
+          _sendResult(id, acquireNotificationActionExecutorResult);
+          break;
+        case 'rift.releaseNotificationActionExecutor':
+          _sendResult(id, releaseNotificationActionExecutorResult);
           break;
         case 'rift.updateNotificationSyncPolicy':
           _sendResult(id, updateNotificationSyncPolicyResult);
@@ -1067,6 +1079,8 @@ void main() {
         notificationId: 'notif-1',
         action: 'open',
       );
+      final executor = await client.acquireNotificationActionExecutor();
+      final releasedExecutor = await client.releaseNotificationActionExecutor();
       final policyResult = await client.updateNotificationSyncPolicy(
         enabled: true,
         mode: 'exclude',
@@ -1088,6 +1102,8 @@ void main() {
         'packageNames': ['com.bank.example'],
       });
       expect(actionResult['operationId'], 'operation-notification-1');
+      expect(executor, {'acquired': true});
+      expect(releasedExecutor, {'released': true});
       expect(policyResult, {
         'enabled': true,
         'mode': 'exclude',

@@ -19,9 +19,65 @@ class _FakeClient extends JsonRpcRiftClient {
       : super(FakeTransport());
 
   List<Map<String, dynamic>> notifications;
+  final StreamController<Map<String, dynamic>> actionRequests =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<bool> connectionChanges =
+      StreamController<bool>.broadcast();
+  final List<Map<String, dynamic>> actionReports = <Map<String, dynamic>>[];
+  Future<void> Function()? beforeActionReport;
+  bool acquireActionExecutorResult = true;
+  int acquireActionExecutorCount = 0;
+  int releaseActionExecutorCount = 0;
 
   @override
   bool get isConnected => true;
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationActionRequest =>
+      actionRequests.stream;
+
+  @override
+  Stream<bool> get onConnectionChanged => connectionChanges.stream;
+
+  @override
+  Future<dynamic> acquireNotificationActionExecutor() async {
+    acquireActionExecutorCount++;
+    return <String, dynamic>{'acquired': acquireActionExecutorResult};
+  }
+
+  @override
+  Future<dynamic> releaseNotificationActionExecutor() async {
+    releaseActionExecutorCount++;
+    return <String, dynamic>{'released': true};
+  }
+
+  @override
+  Future<dynamic> reportLocalNotificationActionHandled({
+    required String requestId,
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    await beforeActionReport?.call();
+    actionReports.add(<String, dynamic>{
+      'requestId': requestId,
+      'success': success,
+      if (failureReason != null) 'failureReason': failureReason,
+      if (message != null) 'message': message,
+    });
+    return <String, dynamic>{};
+  }
+
+  void emitActionRequest(Map<String, dynamic> request) =>
+      actionRequests.add(request);
+
+  void emitConnectionChanged(bool connected) =>
+      connectionChanges.add(connected);
+
+  Future<void> close() async {
+    await actionRequests.close();
+    await connectionChanges.close();
+  }
 
   @override
   Future<dynamic> getDeviceInfo() async => {'deviceId': 'local-device'};
@@ -30,6 +86,46 @@ class _FakeClient extends JsonRpcRiftClient {
   Future<dynamic> listNotifications() async => {
         'notifications': notifications,
       };
+}
+
+class _FakeExecutorLease {
+  _LeasedFakeClient? _owner;
+
+  bool acquire(_LeasedFakeClient client) {
+    _owner ??= client;
+    return identical(_owner, client);
+  }
+
+  bool release(_LeasedFakeClient client) {
+    if (!identical(_owner, client)) {
+      return false;
+    }
+    _owner = null;
+    return true;
+  }
+}
+
+class _LeasedFakeClient extends _FakeClient {
+  _LeasedFakeClient(this.lease);
+
+  final _FakeExecutorLease lease;
+
+  @override
+  Future<dynamic> acquireNotificationActionExecutor() async {
+    acquireActionExecutorCount++;
+    return <String, dynamic>{'acquired': lease.acquire(this)};
+  }
+
+  @override
+  Future<dynamic> releaseNotificationActionExecutor() async {
+    releaseActionExecutorCount++;
+    return <String, dynamic>{'released': lease.release(this)};
+  }
+
+  void disconnectFromDaemon() {
+    lease.release(this);
+    emitConnectionChanged(false);
+  }
 }
 
 class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
@@ -53,6 +149,34 @@ class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
       StreamController<Map<String, dynamic>>.broadcast();
   int startCount = 0;
   int stopCount = 0;
+  int listCount = 0;
+  Object? listError;
+  final List<int> removeCalls = <int>[];
+  WindowsNotificationRemovalResult removalResult =
+      const WindowsNotificationRemovalResult(
+    status: WindowsNotificationRemovalStatus.success,
+  );
+  Object? removeError;
+  bool removeFromActiveOnSuccess = false;
+
+  @override
+  Future<WindowsNotificationRemovalResult> removeNotification(
+    int userNotificationId,
+  ) async {
+    removeCalls.add(userNotificationId);
+    final error = removeError;
+    if (error != null) {
+      throw error;
+    }
+    final result = removalResult;
+    if (result.success && removeFromActiveOnSuccess) {
+      active = active
+          .where((notification) =>
+              notification['userNotificationId'] != userNotificationId)
+          .toList(growable: false);
+    }
+    return result;
+  }
 
   @override
   Future<WindowsNotificationListenerRuntimeStatus> getRuntimeStatus() async =>
@@ -65,7 +189,14 @@ class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
   Future<String> requestAccess() async => accessStatus;
 
   @override
-  Future<List<Map<String, dynamic>>> listActiveNotifications() async => active;
+  Future<List<Map<String, dynamic>>> listActiveNotifications() async {
+    listCount++;
+    final error = listError;
+    if (error != null) {
+      throw error;
+    }
+    return active;
+  }
 
   @override
   Future<bool> start() async {
@@ -80,8 +211,6 @@ class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
 
   @override
   Stream<Map<String, dynamic>> get events => controller.stream;
-
-  void emit(Map<String, dynamic> event) => controller.add(event);
 
   Future<void> close() => controller.close();
 }
@@ -103,12 +232,34 @@ Map<String, dynamic> _activeNotification(
   };
 }
 
+Map<String, dynamic> _actionRequest({
+  String requestId = 'request-1',
+  String notificationId = 'windows:812',
+  String sourceDeviceId = 'local-device',
+  String action = 'dismiss',
+}) =>
+    <String, dynamic>{
+      'requestId': requestId,
+      'operationId': 'operation-1',
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      'requestingDeviceId': 'remote-device',
+      'action': action,
+    };
+
+Future<void> _pumpAsync() async {
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+}
+
 Future<WindowsNotificationSyncCoordinator> _createCoordinator({
   required _FakeWindowsListener listener,
   _FakeClient? client,
   List<Map<String, dynamic>>? published,
   Future<String?> Function()? getLocalDeviceId,
   bool enabled = true,
+  Duration pollInterval = const Duration(hours: 1),
 }) async {
   SharedPreferences.setMockInitialValues({
     'notification_sync_policy_enabled_v2': enabled,
@@ -120,18 +271,21 @@ Future<WindowsNotificationSyncCoordinator> _createCoordinator({
     client: client ?? _FakeClient(),
     listener: listener,
     getLocalDeviceId: getLocalDeviceId,
+    pollInterval: pollInterval,
     publishEvent: (event) async => events.add(Map<String, dynamic>.from(event)),
   );
 }
 
 void main() {
-  test('starts only for packaged, allowed, enabled Windows runtime', () async {
+  test('starts snapshot polling without starting the native event listener',
+      () async {
     final listener = _FakeWindowsListener();
     final coordinator = await _createCoordinator(listener: listener);
 
     await coordinator.start();
 
-    expect(listener.startCount, 1);
+    expect(listener.startCount, 0);
+    expect(listener.listCount, 1);
     expect(coordinator.isRunning, isTrue);
     await coordinator.dispose();
     await listener.close();
@@ -170,18 +324,168 @@ void main() {
     await disabledListener.close();
   });
 
+  test('does not start when another IPC client owns the action executor',
+      () async {
+    final listener = _FakeWindowsListener();
+    final client = _FakeClient()..acquireActionExecutorResult = false;
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+
+    await coordinator.start();
+
+    expect(listener.startCount, 0);
+    expect(coordinator.isRunning, isFalse);
+    expect(client.acquireActionExecutorCount, 1);
+    expect(client.releaseActionExecutorCount, 0);
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('connected standby takes the lease after the owner disconnects',
+      () async {
+    final lease = _FakeExecutorLease();
+    final ownerClient = _LeasedFakeClient(lease);
+    final standbyClient = _LeasedFakeClient(lease);
+    final ownerListener = _FakeWindowsListener(
+      active: [_activeNotification(811)],
+    );
+    final standbyListener = _FakeWindowsListener(
+      active: [_activeNotification(812)],
+    );
+    final owner = await _createCoordinator(
+      listener: ownerListener,
+      client: ownerClient,
+      pollInterval: const Duration(milliseconds: 10),
+    );
+    final standby = await _createCoordinator(
+      listener: standbyListener,
+      client: standbyClient,
+      pollInterval: const Duration(milliseconds: 10),
+    );
+
+    await owner.start();
+    await standby.start();
+    expect(owner.isRunning, isTrue);
+    expect(standby.isRunning, isFalse);
+    expect(standbyClient.acquireActionExecutorCount, 1);
+
+    ownerClient.disconnectFromDaemon();
+    await _pumpAsync();
+    final deadline = DateTime.now().add(const Duration(seconds: 1));
+    while (!standby.isRunning && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    expect(standby.isRunning, isTrue);
+    expect(standbyClient.acquireActionExecutorCount, greaterThanOrEqualTo(2));
+    expect(standbyListener.listCount, greaterThanOrEqualTo(1));
+
+    await owner.dispose();
+    await standby.dispose();
+    expect(ownerClient.releaseActionExecutorCount, 0);
+    expect(standbyClient.releaseActionExecutorCount, 1);
+    await ownerListener.close();
+    await standbyListener.close();
+    await ownerClient.close();
+    await standbyClient.close();
+  });
+
+  test('snapshot failure does not stop polling or release the executor',
+      () async {
+    final listener = _FakeWindowsListener()
+      ..listError = StateError('snapshot failed');
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+
+    await coordinator.start();
+
+    expect(listener.startCount, 0);
+    expect(listener.listCount, 1);
+    expect(coordinator.isRunning, isTrue);
+    expect(client.acquireActionExecutorCount, 1);
+    expect(client.releaseActionExecutorCount, 0);
+    await coordinator.dispose();
+    expect(client.releaseActionExecutorCount, 1);
+    await listener.close();
+    await client.close();
+  });
+
+  test('access loss downgrades tracked actions until a snapshot recovers',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(42)]);
+    final client = _FakeClient();
+    final published = <Map<String, dynamic>>[];
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+      published: published,
+    );
+    await coordinator.start();
+    published.clear();
+
+    listener.accessStatus = 'denied';
+    await coordinator.reconcile();
+
+    expect(coordinator.isRunning, isTrue);
+    expect(client.releaseActionExecutorCount, 0);
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['isDismissible'], isFalse);
+
+    published.clear();
+    listener.accessStatus = 'allowed';
+    await coordinator.reconcile();
+
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['isDismissible'], isTrue);
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('periodic polling stops after disposal', () async {
+    final listener = _FakeWindowsListener();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      pollInterval: const Duration(milliseconds: 10),
+    );
+    await coordinator.start();
+
+    await Future<void>.delayed(const Duration(milliseconds: 35));
+    expect(listener.listCount, greaterThan(1));
+
+    await coordinator.dispose();
+    final countAfterDispose = listener.listCount;
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+    expect(listener.listCount, countAfterDispose);
+
+    await listener.close();
+  });
+
   test('active snapshot posts new records and converts bounded icon metadata',
       () async {
-    final listener = _FakeWindowsListener(
-      active: [
-        {
-          ..._activeNotification(812),
-          'title': 'x' * 300,
-          'bodyPreview': 'y' * 1100,
-          'iconBytes': _pngBytes,
-        },
-      ],
-    );
+    final active = <Map<String, dynamic>>[
+      {
+        ..._activeNotification(812),
+        'title': 'x' * 300,
+        'bodyPreview': 'y' * 1100,
+        'iconBytes': _pngBytes,
+      },
+      {
+        'notificationId': 'windows:913',
+        'userNotificationId': 913,
+        'snapshotIncomplete': true,
+      },
+    ];
+    final listener = _FakeWindowsListener(active: active);
     final published = <Map<String, dynamic>>[];
     final coordinator = await _createCoordinator(
       listener: listener,
@@ -194,7 +498,7 @@ void main() {
     expect(published.single['eventType'], 'posted');
     expect(published.single['notificationId'], 'windows:812');
     expect(published.single['sourcePlatform'], 'windows');
-    expect(published.single['isDismissible'], isFalse);
+    expect(published.single['isDismissible'], isTrue);
     expect(published.single['isOpenable'], isFalse);
     expect((published.single['title'] as String).length, 256);
     expect((published.single['bodyPreview'] as String).length, 1024);
@@ -249,7 +553,7 @@ void main() {
     await listener.close();
   });
 
-  test('Added is posted then updated, and FIFO is preserved through removal',
+  test('snapshot polling emits only additions, changes, and removals',
       () async {
     final listener = _FakeWindowsListener();
     final published = <Map<String, dynamic>>[];
@@ -259,44 +563,73 @@ void main() {
     );
     await coordinator.start();
 
-    listener.emit(_activeNotification(7));
-    listener.emit({
-      'eventType': 'removed',
-      'notificationId': 'windows:7',
-      'removedAt': '2026-08-09T12:01:00Z',
-    });
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
-
+    listener.active = [_activeNotification(7)];
+    await coordinator.reconcile();
     expect(
       published.map((event) => event['eventType']),
-      <String>['posted', 'removed'],
+      <String>['posted'],
     );
 
-    listener.emit(_activeNotification(7));
-    await Future<void>.delayed(Duration.zero);
-    expect(published.last['eventType'], 'posted');
+    published.clear();
+    await coordinator.reconcile();
+    expect(published, isEmpty);
 
-    listener.emit(_activeNotification(7));
-    await Future<void>.delayed(Duration.zero);
-    expect(published.last['eventType'], 'updated');
+    listener.active = [
+      {
+        ..._activeNotification(7),
+        'bodyPreview': 'Updated body',
+      },
+    ];
+    await coordinator.reconcile();
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['bodyPreview'], 'Updated body');
+
+    published.clear();
+    listener.active = [];
+    await coordinator.reconcile();
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'removed');
+    expect(published.single['notificationId'], 'windows:7');
 
     await coordinator.dispose();
     await listener.close();
   });
 
-  test('unknown Removed is forwarded only when daemon knows local record',
+  test('failed snapshot preserves tracked records until a successful poll',
       () async {
-    final listener = _FakeWindowsListener();
-    final client = _FakeClient(
-      notifications: [
-        {
-          'notificationId': 'windows:known',
-          'sourceDeviceId': 'local-device',
-          'sourcePlatform': 'windows',
-        },
-      ],
+    final listener = _FakeWindowsListener(active: [_activeNotification(44)]);
+    final published = <Map<String, dynamic>>[];
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      published: published,
     );
+    await coordinator.start();
+    published.clear();
+
+    listener
+      ..active = []
+      ..listError = StateError('transient snapshot failure');
+    await coordinator.reconcile();
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['notificationId'], 'windows:44');
+    expect(published.single['isDismissible'], isFalse);
+
+    published.clear();
+    listener.listError = null;
+    await coordinator.reconcile();
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'removed');
+    expect(published.single['notificationId'], 'windows:44');
+
+    await coordinator.dispose();
+    await listener.close();
+  });
+
+  test('incomplete snapshot entry is retained but not actionable', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(45)]);
+    final client = _FakeClient();
     final published = <Map<String, dynamic>>[];
     final coordinator = await _createCoordinator(
       listener: listener,
@@ -306,17 +639,378 @@ void main() {
     await coordinator.start();
     published.clear();
 
-    listener
-        .emit({'eventType': 'removed', 'notificationId': 'windows:unknown'});
-    listener.emit({'eventType': 'removed', 'notificationId': 'windows:known'});
-    await Future<void>.delayed(Duration.zero);
-    await Future<void>.delayed(Duration.zero);
-
+    listener.active = [
+      {
+        'notificationId': 'windows:45',
+        'userNotificationId': 45,
+        'snapshotIncomplete': true,
+      },
+    ];
+    await coordinator.reconcile();
     expect(published, hasLength(1));
-    expect(published.single['notificationId'], 'windows:known');
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['notificationId'], 'windows:45');
+    expect(published.single['isDismissible'], isFalse);
+    published.clear();
+
+    client.emitActionRequest(_actionRequest(notificationId: 'windows:45'));
+    await _pumpAsync();
+    expect(listener.removeCalls, isEmpty);
+    expect(
+      client.actionReports.single['failureReason'],
+      'CapabilityUnavailable',
+    );
+
+    listener.active = [];
+    await coordinator.reconcile();
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'removed');
+    expect(published.single['notificationId'], 'windows:45');
 
     await coordinator.dispose();
     await listener.close();
+    await client.close();
+  });
+
+  test('incomplete untracked target fails the exact active recheck', () async {
+    final listener = _FakeWindowsListener();
+    final client = _FakeClient(
+      notifications: [
+        {
+          'notificationId': 'windows:812',
+          'sourceDeviceId': 'local-device',
+          'sourcePlatform': 'windows',
+        },
+      ],
+    );
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    listener.active = [
+      {
+        'notificationId': 'windows:812',
+        'userNotificationId': 812,
+        'snapshotIncomplete': true,
+      },
+    ];
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(
+      client.actionReports.single['failureReason'],
+      'CapabilityUnavailable',
+    );
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('matching dismiss removes exact target and reports success once',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)])
+      ..removeFromActiveOnSuccess = true
+      ..removalResult = const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.success,
+      );
+    final client = _FakeClient();
+    final published = <Map<String, dynamic>>[];
+    client.beforeActionReport = () async {
+      expect(published, isEmpty);
+    };
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+      published: published,
+    );
+    await coordinator.start();
+    published.clear();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, <int>[812]);
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'removed');
+    expect(published.single['notificationId'], 'windows:812');
+    expect(client.actionReports, hasLength(1));
+    expect(client.actionReports.single, {
+      'requestId': 'request-1',
+      'success': true,
+    });
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('wrong source device and platform ID fail without native remove',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    client.emitActionRequest(_actionRequest(
+      requestId: 'wrong-source',
+      sourceDeviceId: 'remote-device',
+    ));
+    client.emitActionRequest(_actionRequest(
+      requestId: 'wrong-platform',
+      notificationId: 'linux:812',
+    ));
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(client.actionReports, hasLength(2));
+    expect(client.actionReports[0]['failureReason'], 'PolicyDenied');
+    expect(client.actionReports[1]['failureReason'], 'CapabilityUnavailable');
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('rejects malformed and overflowing Windows IDs', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    final invalidIds = <String>[
+      'windows:',
+      'windows:-1',
+      'windows:abc',
+      'windows:1:2',
+      'windows:01',
+      'windows:4294967296',
+    ];
+    for (var index = 0; index < invalidIds.length; index++) {
+      client.emitActionRequest(_actionRequest(
+        requestId: 'invalid-$index',
+        notificationId: invalidIds[index],
+      ));
+    }
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(client.actionReports, hasLength(invalidIds.length));
+    expect(
+      client.actionReports.map((report) => report['failureReason']).toSet(),
+      {'CapabilityUnavailable'},
+    );
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('stale target fails after exact active snapshot recheck', () async {
+    final listener = _FakeWindowsListener();
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(
+        client.actionReports.single['failureReason'], 'CapabilityUnavailable');
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('maps native not found, unavailable, error, and thrown failures',
+      () async {
+    for (final testCase in <({
+      WindowsNotificationRemovalResult? result,
+      Object? error,
+      String failureReason,
+    })>[
+      (
+        result: const WindowsNotificationRemovalResult(
+          status: WindowsNotificationRemovalStatus.notFound,
+        ),
+        error: null,
+        failureReason: 'CapabilityUnavailable',
+      ),
+      (
+        result: const WindowsNotificationRemovalResult(
+          status: WindowsNotificationRemovalStatus.unavailable,
+        ),
+        error: null,
+        failureReason: 'CapabilityUnavailable',
+      ),
+      (
+        result: const WindowsNotificationRemovalResult(
+          status: WindowsNotificationRemovalStatus.error,
+        ),
+        error: null,
+        failureReason: 'PeerRejected',
+      ),
+      (
+        result: null,
+        error: StateError('native failure'),
+        failureReason: 'PeerRejected',
+      ),
+    ]) {
+      final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+      if (testCase.result != null) {
+        listener.removalResult = testCase.result!;
+      }
+      listener.removeError = testCase.error;
+      final client = _FakeClient();
+      final coordinator = await _createCoordinator(
+        listener: listener,
+        client: client,
+      );
+      await coordinator.start();
+
+      client.emitActionRequest(_actionRequest());
+      await _pumpAsync();
+
+      expect(listener.removeCalls, <int>[812]);
+      expect(client.actionReports.single['success'], isFalse);
+      expect(
+        client.actionReports.single['failureReason'],
+        testCase.failureReason,
+      );
+
+      await coordinator.dispose();
+      await listener.close();
+      await client.close();
+    }
+  });
+
+  test('stopped coordinator downgrades actions and rejects native remove',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final published = <Map<String, dynamic>>[];
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+      published: published,
+    );
+    await coordinator.start();
+    published.clear();
+    listener.accessStatus = 'denied';
+    await coordinator.refresh();
+
+    expect(published, hasLength(1));
+    expect(published.single['eventType'], 'updated');
+    expect(published.single['isDismissible'], isFalse);
+    expect(client.releaseActionExecutorCount, 1);
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(
+        client.actionReports.single['failureReason'], 'CapabilityUnavailable');
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('reconnect refresh reacquires the action executor lease', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    client.emitConnectionChanged(false);
+    await _pumpAsync();
+
+    await coordinator.refresh();
+    await coordinator.dispose();
+
+    expect(client.acquireActionExecutorCount, 2);
+    expect(client.releaseActionExecutorCount, 1);
+    await listener.close();
+    await client.close();
+  });
+
+  test('refresh stops when this IPC connection loses executor ownership',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    client.acquireActionExecutorResult = false;
+
+    await coordinator.refresh();
+
+    expect(coordinator.isRunning, isFalse);
+    expect(listener.stopCount, 0);
+    expect(client.releaseActionExecutorCount, 0);
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('refresh does not duplicate action subscription', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    await coordinator.refresh();
+    await coordinator.refresh();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, <int>[812]);
+    expect(client.actionReports, hasLength(1));
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('dispose removes action subscription', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    await coordinator.dispose();
+    expect(client.releaseActionExecutorCount, 1);
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(client.actionReports, isEmpty);
+
+    await listener.close();
+    await client.close();
   });
 
   test('Rift-owned notifications are ignored before normalization', () async {
@@ -328,11 +1022,13 @@ void main() {
     );
     await coordinator.start();
 
-    listener.emit({
-      ..._activeNotification(99, packageName: 'Rift.Desktop!Rift'),
-      'isRiftNotification': true,
-    });
-    await Future<void>.delayed(Duration.zero);
+    listener.active = [
+      {
+        ..._activeNotification(99, packageName: 'Rift.Desktop!Rift'),
+        'isRiftNotification': true,
+      },
+    ];
+    await coordinator.reconcile();
 
     expect(published, isEmpty);
     await coordinator.dispose();
