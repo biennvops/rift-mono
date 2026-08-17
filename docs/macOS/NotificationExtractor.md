@@ -20,7 +20,7 @@ Database access is read-only. Each scan uses SQLite's online backup API to creat
 
 The extractor validates the expected `app` and `record` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Neither `record.presented` nor `delivered.list` is a reliable active-notification set on current macOS: `delivered.list` retains historical per-app UUIDs after notifications are no longer visible. `rescanActiveNotifications` therefore fails closed with `activeStateUnavailable` rather than replaying stale notification history. Malformed notification payloads are skipped and counted without returning their content.
 
-Default macOS-origin records report `isDismissible: false` and `isOpenable: false`. An explicitly built and manually authorized Accessibility backend may set `isDismissible: true` for one record only while its database UUID resolves to exactly one individually actionable AX notification. It never advertises open. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier; it does not return the full property-list payload.
+Default macOS-origin records report `isDismissible: false` and `isOpenable: false`. An explicitly built and manually authorized Accessibility backend may set `isDismissible: true` for one record only while its database UUID resolves to exactly one individually actionable AX notification; this optional flavor still requires production-path qualification with the installed extractor before release. It never advertises open. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier; it does not return the full property-list payload.
 
 ## Building the app
 
@@ -62,11 +62,11 @@ Use the same signing identity and bundle location between builds so macOS retain
 
 FDA belongs only to the extractor. Do not grant FDA to Rift Daemon or the Flutter UI.
 
-## Optional Accessibility dismissal
+## Optional Accessibility dismissal (experimental)
 
-Only a bundle built with `RIFT_MACOS_ACCESSIBILITY_NOTIFICATION_ACTIONS=1` can use Accessibility dismissal. After installing that bundle at its stable path, the user may explicitly add and enable **Rift Notification Extractor** under **System Settings → Privacy & Security → Accessibility**. The extractor never opens that pane or prompts during startup.
+Only a bundle built with `RIFT_MACOS_ACCESSIBILITY_NOTIFICATION_ACTIONS=1` can use Accessibility dismissal. This flavor is not release-qualified by the research-app results: production qualification must use the installed extractor bundle at its stable path. After installing that bundle, the user may explicitly add and enable **Rift Notification Extractor** under **System Settings → Privacy & Security → Accessibility**. The extractor never opens that pane or prompts during startup.
 
-Without this grant, notification synchronization remains functional and all macOS records remain non-dismissible. Capability is per record and dynamic: closed Notification Center, collapsed stacks, permission loss, ambiguity, or a missing individual Close action all advertise false.
+Without this grant, notification synchronization remains functional and all macOS records remain non-dismissible. Capability is per record and dynamic: closed Notification Center, collapsed stacks, permission loss, ambiguity, or a missing individual Close action all advertise false. See [Experimental macOS Notification Actions](PrivateNotificationActions.md) for the required daemon/XPC qualification matrix.
 
 ## Request protocol
 

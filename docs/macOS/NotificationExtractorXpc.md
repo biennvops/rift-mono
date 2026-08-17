@@ -114,7 +114,7 @@ daemon-cs/Rift.NotificationExtractor.macOS/Tools/install_macos_notification_extr
 
 Both scripts refuse to overwrite an existing app bundle. The installer uses `launchctl bootstrap` in the current GUI-user domain. Both the daemon and extractor builds require a certificate-backed signing identity; ad-hoc signatures cannot establish the pinned peer identity.
 
-Full Disk Access belongs to the extractor app. An Accessibility build also requires a separate, explicit user grant to that same installed app. Neither permission belongs to the daemon or Flutter UI, and basic notification synchronization does not depend on Accessibility.
+Full Disk Access belongs to the extractor app. An Accessibility build also requires a separate, explicit user grant to that same installed app. Neither permission belongs to the daemon or Flutter UI, and basic notification synchronization does not depend on Accessibility. The Accessibility runtime result is not release-qualified until the installed extractor has completed the production daemon/XPC qualification matrix in [Experimental macOS Notification Actions](PrivateNotificationActions.md).
 
 ## Validation
 
@@ -124,6 +124,6 @@ The focused macOS test script compiles default, private, and Accessibility broke
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/test_macos_notification_actions.sh
 ```
 
-The signed full-app build additionally verifies bundle markers, nested signatures, and broker/worker identifiers. Runtime installation remains a separate user action because it changes a LaunchAgent and the stable TCC-bearing app bundle.
+The signed full-app build additionally verifies bundle markers, nested signatures, and broker/worker identifiers. Runtime installation remains a separate user action because it changes a LaunchAgent and the stable TCC-bearing app bundle. Build success and research-app AX observations do not replace production-path qualification with the installed extractor, its LaunchAgent, and the running daemon.
 
 Authenticated XPC is the production extractor boundary. Seatbelt confinement remains separate follow-up hardening.

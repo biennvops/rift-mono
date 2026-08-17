@@ -1,6 +1,6 @@
 # Experimental macOS Notification Actions
 
-macOS notification dismissal is available only in an explicit Accessibility build and only for records that the current Accessibility tree exposes as one individually actionable notification. The default Rift build still compiles no notification-action backend and advertises `isDismissible: false` and `isOpenable: false`.
+macOS notification dismissal remains experimental. The Accessibility implementation is compiled only in an explicit flavor and fails closed, but the semantic AX mechanism was qualified with a signed research app rather than the installed Rift Notification Extractor production path. Production-path qualification is still required before this flavor can be enabled for release. The default Rift build still compiles no notification-action backend and advertises `isDismissible: false` and `isOpenable: false`.
 
 The private-framework experiment remains unavailable. It identified the internal removal identity but did not provide an entitlement-feasible way for Rift to resolve or mutate the live object.
 
@@ -10,7 +10,7 @@ The private-framework experiment remains unavailable. It identified the internal
 |---|---:|---:|---:|---|---|
 | Public `UserNotifications` | No third-party enumeration | No | No | Normal app authorization | Unsupported |
 | Private native | Internal tuple identified, but unavailable to Rift | API exists, not safely callable | No authorized live enumeration | Apple-private Notification Center entitlement | Unsupported |
-| Accessibility | Yes, DB UUID equals AX identifier | Yes, when individually exposed | Yes | Explicit Accessibility grant | Optional, fail-closed |
+| Accessibility | Yes, DB UUID equals AX identifier | Yes, when individually exposed | Yes | Explicit Accessibility grant | Pending production-path qualification |
 
 The Accessibility result is deliberately conditional. A notification is dismissible only while all of these are true:
 
@@ -43,7 +43,19 @@ This flavor compiles only public `ApplicationServices` and AppKit APIs. It adds 
 RiftAccessibilityNotificationActionsEnabled = true
 ```
 
-It never prompts at daemon or extractor startup. The user must explicitly add and enable the installed **Rift Notification Extractor** in **System Settings → Privacy & Security → Accessibility**. Notification extraction continues to require only Full Disk Access; dismissal remains unavailable when Accessibility is not granted.
+It never prompts at daemon or extractor startup. For a production-path qualification, the user must explicitly add and enable the installed **Rift Notification Extractor** in **System Settings → Privacy & Security → Accessibility**. Notification extraction continues to require only Full Disk Access; dismissal remains unavailable when Accessibility is not granted.
+
+### Production-path qualification status
+
+The build and native request tests have been run for the real extractor with `RIFT_MACOS_ACCESSIBILITY_NOTIFICATION_ACTIONS=1`. The runtime AX scenarios recorded below were run with the signed research app, not that extractor bundle, so they do not qualify the daemon → authenticated XPC → LaunchAgent extractor path.
+
+Before release, repeat the qualification with the real extractor installed at `~/Applications/Rift Notification Extractor.app`, after granting Accessibility to that installed app:
+
+1. Exercise `getNotificationActionBackendStatus` and `getNotificationActionCapabilities` through the running daemon and authenticated extractor XPC service.
+2. Exercise `dismissNotification` for a unique target, an identical sibling, a collapsed stack, a revoked permission, and a verified-removal case.
+3. Record the production-path result and confirm that only the target disappears while siblings remain.
+
+Until this matrix is completed and recorded, the Accessibility flavor is development/validation-only and must not be treated as a release capability.
 
 The private development flavor remains separately gated:
 
