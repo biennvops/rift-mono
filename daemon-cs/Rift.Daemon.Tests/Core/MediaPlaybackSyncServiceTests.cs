@@ -345,7 +345,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         var firstReplayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirstReplay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var replayCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _transport.BeforeSendAsync = async envelope =>
+        _transport.BeforeSendAsync = async (peerDeviceId, envelope) =>
         {
             if (!string.Equals(envelope.GetProperty("type").GetString(), "media.playbackPosted", StringComparison.Ordinal))
             {
@@ -388,6 +388,56 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             _transport.Payloads,
             envelope => string.Equals(envelope.GetProperty("type").GetString(), "media.playbackPosted", StringComparison.Ordinal) &&
                 string.Equals(envelope.GetProperty("payload").GetProperty("playbackId").GetString(), "playback-b", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PlaybackPublicationToOnePeer_DoesNotBlockAnotherPeer()
+    {
+        const string blockedPeerDeviceId = "blocked-peer";
+        const string healthyPeerDeviceId = "healthy-peer";
+        var service = CreateService();
+        var firstSendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transport.BeforeSendAsync = async (peerDeviceId, envelope) =>
+        {
+            if (string.Equals(peerDeviceId, blockedPeerDeviceId, StringComparison.Ordinal) &&
+                string.Equals(envelope.GetProperty("type").GetString(), "media.playbackPosted", StringComparison.Ordinal))
+            {
+                firstSendStarted.SetResult();
+                await releaseFirstSend.Task;
+            }
+        };
+
+        var blockedSend = service.PublishLocalPlaybackToPeerAsync(
+            blockedPeerDeviceId,
+            CreatePlayback(_identityManager.GetDeviceId(), "blocked-playback", "Blocked Track"),
+            CancellationToken.None);
+        await firstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        _presenceService.UpdatePeerPresence(
+            healthyPeerDeviceId,
+            "online",
+            DateTimeOffset.UtcNow.ToString("O"),
+            ["media.playback"]);
+
+        var healthyRemoval = service.HandleLocalPlaybackEventAsync(
+            "removed",
+            CreatePlayback(_identityManager.GetDeviceId(), "healthy-playback", "Healthy Track"),
+            "2026-07-16T10:01:00Z",
+            CancellationToken.None);
+        try
+        {
+            await healthyRemoval.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            releaseFirstSend.SetResult();
+            await blockedSend;
+        }
+
+        Assert.Contains(
+            _transport.Payloads,
+            envelope => string.Equals(envelope.GetProperty("type").GetString(), "media.playbackRemoved", StringComparison.Ordinal) &&
+                string.Equals(envelope.GetProperty("payload").GetProperty("playbackId").GetString(), "healthy-playback", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -815,7 +865,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
         public List<JsonElement> Payloads { get; } = [];
-        public Func<JsonElement, Task>? BeforeSendAsync { get; set; }
+        public Func<string, JsonElement, Task>? BeforeSendAsync { get; set; }
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -840,7 +890,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             var envelope = document.RootElement.Clone();
             if (BeforeSendAsync is not null)
             {
-                await BeforeSendAsync(envelope);
+                await BeforeSendAsync(peerDeviceId, envelope);
             }
             SentMessages.Add((peerDeviceId, envelope.GetProperty("type").GetString() ?? string.Empty));
             Payloads.Add(envelope);

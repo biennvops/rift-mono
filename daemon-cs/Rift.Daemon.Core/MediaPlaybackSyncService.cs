@@ -46,7 +46,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     };
     private readonly Lock _gate = new();
     private readonly Lock _artworkCacheGate = new();
-    private readonly SemaphoreSlim _playbackPublicationGate = new(1, 1);
+    private readonly Dictionary<string, SemaphoreSlim> _playbackPublicationGates = new(Comparer);
     private readonly Dictionary<string, IReadOnlyDictionary<string, object?>> _artworkCache = new(Comparer);
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
@@ -173,7 +173,8 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             throw new InvalidOperationException("Removed media playback records cannot be published as active playback.");
         }
 
-        await _playbackPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var playbackPublicationGate = GetPlaybackPublicationGate(peerDeviceId);
+        await playbackPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var sourceDeviceId = string.IsNullOrWhiteSpace(playback.SourceDeviceId)
@@ -207,7 +208,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
         finally
         {
-            _playbackPublicationGate.Release();
+            playbackPublicationGate.Release();
         }
     }
 
@@ -1043,6 +1044,20 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         payload
     };
 
+    private SemaphoreSlim GetPlaybackPublicationGate(string peerDeviceId)
+    {
+        lock (_gate)
+        {
+            if (!_playbackPublicationGates.TryGetValue(peerDeviceId, out var gate))
+            {
+                gate = new SemaphoreSlim(1, 1);
+                _playbackPublicationGates[peerDeviceId] = gate;
+            }
+
+            return gate;
+        }
+    }
+
     private async Task<IReadOnlyList<string>> BroadcastAsync(string messageType, object payload, CancellationToken cancellationToken)
     {
         var sentTo = new List<string>();
@@ -1058,14 +1073,15 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             try
             {
                 var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(messageType, payload)));
-                await _playbackPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                var playbackPublicationGate = GetPlaybackPublicationGate(peer.DeviceId);
+                await playbackPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
                     await _transport.SendAsync(peer.DeviceId, bytes, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
-                    _playbackPublicationGate.Release();
+                    playbackPublicationGate.Release();
                 }
                 sentTo.Add(peer.DeviceId);
             }
