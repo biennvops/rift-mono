@@ -728,6 +728,108 @@ void main() {
       },
     );
 
+    test(
+      'preserves chunk counts and hashes across boundaries and negotiated sizes',
+      () async {
+        var messageSequence = 0;
+
+        Future<void> verifyTransfer(int byteSize, int chunkSize) async {
+          transport.sentMessages.clear();
+          final original = Uint8List.fromList(
+            List<int>.generate(byteSize, (index) => (index * 31 + 7) & 0xff),
+          );
+          final localFile = File(
+            '${tempDir.path}${Platform.pathSeparator}'
+            'integrity-$chunkSize-$byteSize.bin',
+          );
+          await localFile.writeAsBytes(original);
+          final result = await service.offerFile(
+            targetDeviceId: 'rift-peer',
+            localPath: localFile.path,
+          );
+          final completed = service.onTransferCompleted.firstWhere(
+            (event) => event['transferId'] == result.transferId,
+          );
+          messageSequence++;
+          transport.simulateIncomingMessage('rift-peer', {
+            'rift': '0.1-draft',
+            'messageId':
+                '44444444-4444-4444-8444-${messageSequence.toString().padLeft(12, '0')}',
+            'type': 'file.accept',
+            'sourceDeviceId': 'rift-peer',
+            'destinationDeviceId': 'rift-local',
+            'payload': {
+              'transferId': result.transferId,
+              'receivingDeviceId': 'rift-peer',
+              'chunkSize': chunkSize,
+            },
+          });
+          await completed.timeout(const Duration(seconds: 5));
+
+          final chunks = transport.sentMessages
+              .where((message) => message['type'] == 'file.chunk')
+              .where(
+                (message) =>
+                    (message['payload']
+                        as Map<String, dynamic>)['transferId'] ==
+                    result.transferId,
+              )
+              .map((message) => message['payload'] as Map<String, dynamic>)
+              .toList(growable: false);
+          final expectedCount = byteSize == 0
+              ? 1
+              : ((byteSize + chunkSize) - 1) ~/ chunkSize;
+          expect(chunks, hasLength(expectedCount));
+
+          final reconstructed = BytesBuilder(copy: false);
+          var expectedOffset = 0;
+          for (var index = 0; index < chunks.length; index++) {
+            final chunk = chunks[index];
+            final decoded = base64.decode(chunk['contentBase64'] as String);
+            expect(chunk['chunkIndex'], index);
+            expect(chunk['offset'], expectedOffset);
+            expect(chunk['byteSize'], decoded.length);
+            expect(chunk['chunkSha256'], sha256.convert(decoded).toString());
+            expect(chunk['isLastChunk'], index == chunks.length - 1);
+            reconstructed.add(decoded);
+            expectedOffset += decoded.length;
+          }
+          final reconstructedBytes = reconstructed.takeBytes();
+          expect(reconstructedBytes, original);
+          expect(
+            sha256.convert(reconstructedBytes).toString(),
+            sha256.convert(original).toString(),
+          );
+
+          final completion = transport.sentMessages.singleWhere(
+            (message) =>
+                message['type'] == 'file.complete' &&
+                (message['payload'] as Map<String, dynamic>)['transferId'] ==
+                    result.transferId,
+          );
+          expect(
+            (completion['payload'] as Map<String, dynamic>)['chunkCount'],
+            expectedCount,
+          );
+        }
+
+        const baselineChunkSize = FileTransferService.defaultChunkSize;
+        for (final byteSize in [
+          0,
+          1,
+          baselineChunkSize - 1,
+          baselineChunkSize,
+          baselineChunkSize + 1,
+          baselineChunkSize * 2 + 17,
+        ]) {
+          await verifyTransfer(byteSize, baselineChunkSize);
+        }
+        for (final chunkSize in [64 * 1024, 512 * 1024, 1024 * 1024]) {
+          await verifyTransfer(chunkSize * 2 + 17, chunkSize);
+        }
+      },
+    );
+
     test('rejects resume before an outgoing transfer is accepted', () async {
       final localFile = File(
         '${tempDir.path}${Platform.pathSeparator}not-accepted.txt',
