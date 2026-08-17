@@ -172,6 +172,45 @@ class AndroidMediaSessionObserverTest {
     }
 
     @Test
+    fun reusedArtworkUriWithChangedTrackMetadataChangesArtworkKey() {
+        val resolver = ArtworkKeyResolver()
+        val original = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = Any(),
+            bitmapIdentity = 7,
+            generationId = 2,
+            width = 640,
+            height = 360,
+            semanticIdentity = artworkSemanticIdentity(
+                uri = "art://current",
+                mediaId = "track-a",
+                title = "Track A",
+                artist = "Artist",
+                album = "Album",
+                durationMs = 180_000L,
+            ),
+        )
+        val changed = resolver.resolve(
+            playbackId = "player-1",
+            bitmap = Any(),
+            bitmapIdentity = 8,
+            generationId = 12,
+            width = 640,
+            height = 360,
+            semanticIdentity = artworkSemanticIdentity(
+                uri = "art://current",
+                mediaId = "track-b",
+                title = "Track B",
+                artist = "Artist",
+                album = "Album",
+                durationMs = 180_000L,
+            ),
+        )
+
+        assertNotEquals(original, changed)
+    }
+
+    @Test
     fun changedArtworkUriChangesSemanticArtworkIdentity() {
         val resolver = ArtworkKeyResolver()
         val original = resolver.resolve(

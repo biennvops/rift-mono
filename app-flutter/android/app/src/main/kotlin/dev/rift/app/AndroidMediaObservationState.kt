@@ -12,6 +12,27 @@ internal data class ArtworkSemanticIdentity(
     val durationMs: Long? = null,
 )
 
+internal fun artworkSemanticIdentity(
+    uri: String?,
+    mediaId: String?,
+    title: String?,
+    artist: String?,
+    album: String?,
+    durationMs: Long?,
+): ArtworkSemanticIdentity? {
+    if (uri == null && mediaId == null && title == null && artist == null && album == null && durationMs == null) {
+        return null
+    }
+    return ArtworkSemanticIdentity(
+        uri = uri,
+        mediaId = mediaId,
+        title = title,
+        artist = artist,
+        album = album,
+        durationMs = durationMs,
+    )
+}
+
 internal sealed interface ArtworkSourceIdentity {
     data class Metadata(val value: ArtworkSemanticIdentity) : ArtworkSourceIdentity
 

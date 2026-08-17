@@ -457,22 +457,14 @@ class AndroidMediaSessionObserver(
         val uri = metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)?.takeIf { it.isNotBlank() }
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.takeIf { it.isNotBlank() }
             ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)?.takeIf { it.isNotBlank() }
-        if (uri != null) {
-            return ArtworkSemanticIdentity(uri = uri)
-        }
         val mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.takeIf { it.isNotBlank() }
-        if (mediaId != null) {
-            return ArtworkSemanticIdentity(mediaId = mediaId)
-        }
-
         val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)
         val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
         val album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)
         val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).takeIf { it > 0L }
-        if (title == null && artist == null && album == null && duration == null) {
-            return null
-        }
-        return ArtworkSemanticIdentity(
+        return artworkSemanticIdentity(
+            uri = uri,
+            mediaId = mediaId,
             title = title,
             artist = artist,
             album = album,
