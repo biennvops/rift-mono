@@ -13,15 +13,22 @@ dart run benchmark/transport_file_transfer_benchmark.dart \
   --json > /tmp/rift-baseline.json
 ```
 
-Compare a later run made on the same machine and in the same runtime mode:
+Compare a later run with the same host, SDK, runtime mode, suites, and
+workload settings:
 
 ```sh
 dart run benchmark/transport_file_transfer_benchmark.dart \
   --compare /tmp/rift-baseline.json
 ```
 
-For production logging comparisons, compile both revisions as AOT executables so
-`dart.vm.product` matches deployed behavior:
+`--compare` refuses reports whose host/runtime/workload identity differs or whose
+matching results use different operation counts. Reports automatically record
+the Git commit, dirty-tree state, hostname, and timestamp. Run from the intended
+checkout; when using an AOT executable, compile and execute it before switching
+revisions so the recorded source revision remains attributable.
+
+For revision-level production logging comparisons, compile each revision as an
+AOT executable so `dart.vm.product` matches deployed behavior:
 
 ```sh
 dart compile exe benchmark/transport_file_transfer_benchmark.dart \
@@ -47,8 +54,8 @@ The suites measure:
   negotiated 256 KiB baseline;
 - receiver Base64 decode, SHA-256 verification, and the production
   open/append/close staging-file pattern;
-- the production `TransportImpl.sendMessage()` logging path against an
-  otherwise equivalent no-per-message-log path.
+- the optimized production `TransportImpl.sendMessage()` path against a retained
+  benchmark equivalent of the original two per-message INFO calls.
 
 Generated file data is deterministic and non-zero. File generation, identity
 creation, certificate generation, and TLS handshakes occur outside measured
@@ -57,6 +64,6 @@ reported wire-byte count. Large asynchronous workloads sample starting, peak,
 and ending RSS; latency microbenchmarks avoid the sampler.
 
 Flush variants other than `flush-every-frame` are experiments only. They do not
-change `sendMessage()` completion, backpressure, or ordering semantics. Do not
-compare results from different machines, runtime modes, suite selections, or
-workload settings as if they were a controlled before/after measurement.
+change `sendMessage()` completion, backpressure, or ordering semantics. A valid
+comparison requires identical machine/runtime, suite selection, and workload
+settings; the benchmark enforces these requirements before emitting deltas.

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:daemon_dart/src/core/rift_log.dart';
 import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
 import 'package:daemon_dart/src/network/frame_codec.dart';
 import 'package:daemon_dart/src/network/peer_write_gate.dart';
@@ -848,17 +849,35 @@ class RiftBenchmarkWorkloads {
     transport.injectConnectionForTesting(peerDeviceId, tls.sender);
     final payload = jsonPayloadOfSize(2 * _kibibyte);
     final operations = config.quick ? 32 : 128;
-    try {
+
+    Future<void> measureVariant({
+      required String variant,
+      required bool retainOriginalInfoLogs,
+    }) async {
       await _measure(
         benchmark: 'transport/per-message-logging',
-        variant: 'production',
+        variant: variant,
         payloadBytes: payload.length,
         body: () async {
           final receiveTarget =
               tls.receivedBytes + (payload.length + 4) * operations;
           final watch = Stopwatch()..start();
           for (var i = 0; i < operations; i++) {
+            if (retainOriginalInfoLogs) {
+              RiftLog.info(
+                '[TLS] transport.sendMessage peerDeviceId=$peerDeviceId '
+                'bytes=${payload.length} '
+                'remote=${tls.sender.remoteAddress.address}:'
+                '${tls.sender.remotePort}',
+              );
+            }
             await transport.sendMessage(peerDeviceId, payload);
+            if (retainOriginalInfoLogs) {
+              RiftLog.info(
+                '[TLS] transport.sendMessage flushed '
+                'peerDeviceId=$peerDeviceId',
+              );
+            }
           }
           await tls.waitForReceived(receiveTarget);
           watch.stop();
@@ -867,41 +886,20 @@ class RiftBenchmarkWorkloads {
             operations: operations,
             throughputBytes: payload.length * operations,
             wireBytes: (payload.length + 4) * operations,
-            metrics: {'logEvents': 0},
+            metrics: {'logEvents': retainOriginalInfoLogs ? operations * 2 : 0},
           );
         },
       );
+    }
 
-      final gate = PeerWriteGate();
-      await _measure(
-        benchmark: 'transport/per-message-logging',
-        variant: 'no-per-message-log-equivalent',
-        payloadBytes: payload.length,
-        body: () async {
-          final receiveTarget =
-              tls.receivedBytes + (payload.length + 4) * operations;
-          final watch = Stopwatch()..start();
-          for (var i = 0; i < operations; i++) {
-            final decoded = json.decode(utf8.decode(payload));
-            if (decoded is! Map<String, dynamic>) {
-              throw StateError('Logging benchmark payload was not an object.');
-            }
-            final frame = RiftFrameCodec.encodeBytes(payload);
-            await gate.run(() async {
-              tls.sender.add(frame);
-              await tls.sender.flush();
-            });
-          }
-          await tls.waitForReceived(receiveTarget);
-          watch.stop();
-          return BenchmarkMeasurement(
-            elapsed: watch.elapsed,
-            operations: operations,
-            throughputBytes: payload.length * operations,
-            wireBytes: (payload.length + 4) * operations,
-            metrics: {'logEvents': 0},
-          );
-        },
+    try {
+      await measureVariant(
+        variant: 'retained-original-info-logs',
+        retainOriginalInfoLogs: true,
+      );
+      await measureVariant(
+        variant: 'production',
+        retainOriginalInfoLogs: false,
       );
     } finally {
       await transport.stopServer();
