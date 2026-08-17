@@ -34,7 +34,10 @@ internal fun artworkSemanticIdentity(
 }
 
 internal sealed interface ArtworkSourceIdentity {
-    data class Metadata(val value: ArtworkSemanticIdentity) : ArtworkSourceIdentity
+    data class Metadata(
+        val playbackId: String,
+        val value: ArtworkSemanticIdentity,
+    ) : ArtworkSourceIdentity
 
     data class Bitmap(val identity: Int) : ArtworkSourceIdentity
 }
@@ -50,7 +53,7 @@ internal class ArtworkKeyResolver(
     private val maxStableEntries: Int = 32,
 ) {
     private data class StableBase(
-        val identity: ArtworkSemanticIdentity,
+        val source: ArtworkSourceIdentity.Metadata,
         val width: Int,
         val height: Int,
     )
@@ -85,7 +88,13 @@ internal class ArtworkKeyResolver(
         height: Int,
         semanticIdentity: ArtworkSemanticIdentity?,
     ): ArtworkKey {
-        val stableBase = semanticIdentity?.let { StableBase(it, width, height) }
+        val stableBase = semanticIdentity?.let { identity ->
+            StableBase(
+                source = ArtworkSourceIdentity.Metadata(playbackId, identity),
+                width = width,
+                height = height,
+            )
+        }
         val previous = lastByPlaybackId[playbackId]
         val key = if (stableBase == null) {
             ArtworkKey(
@@ -107,7 +116,7 @@ internal class ArtworkKeyResolver(
             }
             revisionByStableBase[stableBase] = revision
             ArtworkKey(
-                source = ArtworkSourceIdentity.Metadata(stableBase.identity),
+                source = stableBase.source,
                 revision = revision,
                 width = width,
                 height = height,

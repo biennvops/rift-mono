@@ -172,6 +172,37 @@ class AndroidMediaSessionObserverTest {
     }
 
     @Test
+    fun identicalMetadataAcrossPlaybackSessionsUsesDifferentArtworkKeys() {
+        val resolver = ArtworkKeyResolver()
+        val semanticIdentity = ArtworkSemanticIdentity(
+            title = "Song",
+            artist = "Artist",
+            album = "Album",
+            durationMs = 180_000L,
+        )
+        val sessionA = resolver.resolve(
+            playbackId = "player-a",
+            bitmap = Any(),
+            bitmapIdentity = 7,
+            generationId = 2,
+            width = 640,
+            height = 360,
+            semanticIdentity = semanticIdentity,
+        )
+        val sessionB = resolver.resolve(
+            playbackId = "player-b",
+            bitmap = Any(),
+            bitmapIdentity = 8,
+            generationId = 12,
+            width = 640,
+            height = 360,
+            semanticIdentity = semanticIdentity,
+        )
+
+        assertNotEquals(sessionA, sessionB)
+    }
+
+    @Test
     fun reusedArtworkUriWithChangedTrackMetadataChangesArtworkKey() {
         val resolver = ArtworkKeyResolver()
         val original = resolver.resolve(
