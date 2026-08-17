@@ -294,6 +294,87 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PeerSessionOnline_DoesNotReplayRemovedLocalPlayback()
+    {
+        var service = CreateService();
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(_identityManager.GetDeviceId(), "removed-playback", "Removed Track"),
+            CancellationToken.None);
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(_identityManager.GetDeviceId(), "active-playback", "Active Track"),
+            CancellationToken.None);
+        await service.HandleMediaPlaybackRemovedAsync(
+            new MediaPlaybackRemovedRecord
+            {
+                PlaybackId = "removed-playback",
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                RemovedAt = "2026-07-16T10:01:00Z"
+            },
+            CancellationToken.None);
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: true,
+            selectedCapabilities: ["media.playback"],
+            allowsProtectedTraffic: true));
+
+        var payload = Assert.Single(_transport.Payloads).GetProperty("payload");
+        Assert.Equal("active-playback", payload.GetProperty("playbackId").GetString());
+    }
+
+    [Fact]
+    public async Task PeerSessionOnline_DoesNotReplayWithoutProtectedMediaCapability()
+    {
+        var service = CreateService();
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(_identityManager.GetDeviceId(), "playback-1", "Track"),
+            CancellationToken.None);
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "untrusted-peer",
+            isOnline: true,
+            selectedCapabilities: ["media.playback"],
+            allowsProtectedTraffic: false));
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "incapable-peer",
+            isOnline: true,
+            selectedCapabilities: ["clipboard.offer_fetch"],
+            allowsProtectedTraffic: true));
+
+        Assert.Empty(_transport.SentMessages);
+    }
+
+    [Fact]
+    public async Task PublishLocalPlaybackToPeerAsync_RejectsRemovedPlayback()
+    {
+        var service = CreateService();
+        var playback = CreatePlayback(_identityManager.GetDeviceId(), "playback-1", "Track");
+        var removed = new MediaPlaybackRecord
+        {
+            PlaybackId = playback.PlaybackId,
+            SourceDeviceId = playback.SourceDeviceId,
+            AppId = playback.AppId,
+            AppName = playback.AppName,
+            Title = playback.Title,
+            PlaybackState = playback.PlaybackState,
+            PositionMs = playback.PositionMs,
+            CanPlay = playback.CanPlay,
+            CanPause = playback.CanPause,
+            CanSkipNext = playback.CanSkipNext,
+            CanSkipPrevious = playback.CanSkipPrevious,
+            CanSeek = playback.CanSeek,
+            UpdatedAt = playback.UpdatedAt,
+            IsRemoved = true,
+            RemovedAt = "2026-07-16T10:01:00Z"
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.PublishLocalPlaybackToPeerAsync("rift-peer", removed, CancellationToken.None));
+
+        Assert.Empty(_transport.SentMessages);
+    }
+
+    [Fact]
     public async Task PeerSessionOffline_RemovesRemotePlaybackRecords()
     {
         var service = CreateService();

@@ -89,12 +89,19 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     {
         if (args.IsOnline)
         {
+            if (!args.AllowsProtectedTraffic ||
+                !args.SelectedCapabilities.Contains(RequiredCapability, StringComparer.Ordinal))
+            {
+                return;
+            }
+
             MediaPlaybackRecord[] localPlaybacks;
             lock (_gate)
             {
                 var localDeviceId = _identityManager.GetDeviceId();
                 localPlaybacks = _playbacks.Values
-                    .Where(playback => string.Equals(playback.SourceDeviceId, localDeviceId, StringComparison.Ordinal))
+                    .Where(playback => !playback.IsRemoved &&
+                        string.Equals(playback.SourceDeviceId, localDeviceId, StringComparison.Ordinal))
                     .Select(CloneRecord)
                     .ToArray();
             }
@@ -160,6 +167,11 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (playback.IsRemoved)
+        {
+            throw new InvalidOperationException("Removed media playback records cannot be published as active playback.");
+        }
+
         var normalized = NormalizeLocalRecord(playback);
         ValidateRecord(normalized);
         if (!_transport.HasProtectedSession(peerDeviceId))
