@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rift/src/device_status/android_foreground_sync_status_controller.dart';
 
@@ -250,6 +251,32 @@ void main() {
       expect(
           published.last.runtimeState, AndroidForegroundSyncRuntimeState.ready);
       expect(published.last.connectedPeerNames, ['Phone']);
+    });
+
+    test('healing timer refreshes without waiting in real time', () {
+      fakeAsync((async) {
+        var calls = 0;
+        final healingController = AndroidForegroundSyncStatusController(
+          listTrustedPeers: () async {
+            calls++;
+            return response;
+          },
+          publishForegroundSyncStatus: (status) async => true,
+          debounce: Duration.zero,
+          healingRefreshInterval: const Duration(seconds: 60),
+        );
+
+        healingController.start();
+        async.flushMicrotasks();
+        expect(calls, 1);
+
+        async.elapse(const Duration(seconds: 60));
+        async.flushMicrotasks();
+        expect(calls, 2);
+
+        healingController.dispose();
+        async.flushMicrotasks();
+      });
     });
 
     test('list failures are non-fatal and later refreshes recover', () async {

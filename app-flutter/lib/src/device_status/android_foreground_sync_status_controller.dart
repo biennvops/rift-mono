@@ -73,7 +73,7 @@ const int _maxDisplayedPeerNames = 5;
 const int _maxPeerNameLength = 48;
 
 String normalizeAndroidForegroundSyncPeerName(Object? value) {
-  var normalized = value?.toString() ?? '';
+  var normalized = value is String ? value : '';
   normalized = normalized.trim().replaceAll(RegExp(r'\s+'), ' ');
   normalized = String.fromCharCodes(
     normalized.runes.where((rune) => !_isControlCharacter(rune)),
