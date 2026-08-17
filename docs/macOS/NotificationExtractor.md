@@ -4,13 +4,13 @@ Rift uses a dedicated background app for reading Notification Center metadata on
 
 ## Security boundary
 
-The extractor bundle identifier is `com.rift.notification-extractor`. It has no network listener and accepts only newline-delimited JSON requests through standard input. The phase-one operation vocabulary is fixed:
+The extractor bundle identifier is `com.rift.notification-extractor`. It has no network listener. Its signed Swift broker accepts compact JSON through one authenticated XPC method carrying `Data`, and forwards only extraction operations to a private C# worker over inherited standard streams. The worker's operation vocabulary is fixed:
 
 - `getStatus`
 - `scanNotificationChanges`
 - `rescanActiveNotifications`
 
-The process does not accept paths, SQL, shell commands, or generic file-read requests. It always reads:
+The worker does not accept paths, SQL, shell commands, or generic file-read requests. It always reads:
 
 ```text
 ~/Library/Group Containers/group.com.apple.usernoted/db2/db
@@ -29,6 +29,8 @@ From the repository root:
 ```bash
 daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
+
+Normal builds compile no private notification-action probes. The explicit development-only flavor and its current unavailable research result are documented in [Experimental macOS Private Notification Actions](PrivateNotificationActions.md).
 
 The script defaults to the current architecture and creates:
 
@@ -62,7 +64,7 @@ FDA belongs only to the extractor. Do not grant FDA to Rift Daemon or the Flutte
 
 ## Request protocol
 
-One compact JSON object is accepted per line, with a maximum request size of 64 KiB.
+One compact JSON object is accepted per authenticated XPC request, with a maximum request size of 64 KiB. The broker frames extraction requests as a single line only on its private worker stream.
 
 ```json
 {"id":"1","operation":"getStatus"}
@@ -83,8 +85,8 @@ Expected status states are:
 - `fullDiskAccessRequired`
 - `unsupportedSchema`
 
-The macOS daemon launches the extractor through LaunchServices so TCC attributes FDA to the extractor bundle rather than the daemon. Requests and responses use per-call private temporary directories and mode-`0600` files. Calls time out after 10 seconds, responses are limited to 1 MiB, and malformed or oversized responses are rejected. On startup the daemon advances its cursor without replaying historical records, then publishes only newly observed records. Rift-owned bundle identifiers are ignored to prevent mirrored notifications from being extracted and echoed back to peers.
+The installed LaunchAgent owns the extractor app process, so TCC attributes FDA to that bundle rather than the daemon. The daemon reaches its certificate-pinned broker over the authenticated Mach service described in [Notification Extractor XPC](NotificationExtractorXpc.md). The broker launches a fresh worker for each extraction request, enforces a 10-second timeout, limits responses to 1 MiB, and rejects malformed or oversized responses. Database scans use private mode-`0600` snapshots. On startup the daemon advances its cursor without replaying historical records, then publishes only newly observed records. Rift-owned bundle identifiers are ignored to prevent mirrored notifications from being extracted and echoed back to peers.
 
 Current macOS data does not provide a validated dismissal lifecycle, so desktop-origin removals are not emitted in this phase. This is safer than treating retained `delivered.list` UUIDs as active and replaying stale notifications.
 
-Authenticated XPC and Seatbelt confinement are intentionally deferred. Standard input is the functional prototype transport and must not be treated as signed-peer authentication.
+Authenticated XPC is the production transport boundary for the extractor. Seatbelt confinement remains separate follow-up hardening.
