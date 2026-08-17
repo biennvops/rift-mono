@@ -296,7 +296,10 @@ void main() {
       );
 
       await controller.start();
-      expect(published, isEmpty);
+      expect(published, hasLength(1));
+      expect(published.single.runtimeState,
+          AndroidForegroundSyncRuntimeState.ready);
+      expect(published.single.trustedPeerCount, 0);
       fail = false;
       await controller.refreshNow();
       expect(published, hasLength(1));

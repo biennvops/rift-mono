@@ -350,6 +350,10 @@ class AndroidForegroundSyncStatusController {
       await _publishCurrentStatus();
     } catch (error) {
       _logger?.call('Foreground sync peer refresh failed: $error');
+      if (!_disposed) {
+        _lastPeerSnapshot ??= const _PeerSnapshot.empty();
+        await _publishCurrentStatus();
+      }
     }
   }
 
