@@ -40,8 +40,14 @@ class AndroidMediaSessionObserver(
 
         internal fun canPause(actions: Long): Boolean =
             actions and (PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE) != 0L
+
+        internal fun shouldObservePackage(packageName: String, ownPackageName: String): Boolean =
+            packageName != ownPackageName
     }
 
+    private val stats = MutableMediaObserverStats()
+    private val snapshotTracker = MediaSnapshotTracker(stats)
+    private val appLabelCache = MediaAppLabelCache(::resolveAppLabel, stats)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -66,7 +72,6 @@ class AndroidMediaSessionObserver(
     private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
     private val controllersById = LinkedHashMap<String, MediaController>()
     private val callbacksById = HashMap<String, MediaController.Callback>()
-    private val postedIds = HashSet<String>()
     private val missingSinceById = HashMap<String, Long>()
 
     fun setEventSink(sink: EventChannel.EventSink?) {
@@ -111,7 +116,11 @@ class AndroidMediaSessionObserver(
         sessionManager = null
         controllersById.keys.toList().forEach { removeController(it) }
         missingSinceById.clear()
+        snapshotTracker.clear()
+        appLabelCache.clear()
     }
+
+    internal fun statsSnapshot(): MediaObserverStats = stats.snapshot()
 
     fun performAction(playbackId: String, action: String, positionMs: Long?): Map<String, Any?> {
         val controller = controllersById[playbackId]
@@ -172,12 +181,13 @@ class AndroidMediaSessionObserver(
         controllers: List<MediaController>,
         forceReplay: Boolean = false,
     ) {
+        stats.reconciliationPasses.incrementAndGet()
         val nextIds = HashSet<String>()
         for (controller in controllers) {
             // Never observe our own sessions: RemoteMediaPlaybackManager
             // creates a MediaSessionCompat to display *remote* playback, and
             // republishing it would echo peers' media back at them in a loop.
-            if (controller.packageName == context.packageName) {
+            if (!shouldObservePackage(controller.packageName, context.packageName)) {
                 continue
             }
             val id = playbackIdFor(controller)
@@ -222,7 +232,7 @@ class AndroidMediaSessionObserver(
         missingSinceById.remove(id)
         val controller = controllersById.remove(id) ?: return
         callbacksById.remove(id)?.let { controller.unregisterCallback(it) }
-        if (postedIds.remove(id)) {
+        if (snapshotTracker.remove(id)) {
             val payload = mapOf(
                 "eventType" to "removed",
                 "playbackId" to id,
@@ -235,56 +245,87 @@ class AndroidMediaSessionObserver(
 
     private fun emitSnapshot(id: String, forcePosted: Boolean = false) {
         val controller = controllersById[id] ?: return
-        val state = controller.playbackState ?: return
-        val playbackState = when (state.state) {
+        val playback = controller.playbackState ?: return
+        val playbackState = when (playback.state) {
             PlaybackState.STATE_PLAYING -> "playing"
             PlaybackState.STATE_PAUSED -> "paused"
             PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING -> "buffering"
             PlaybackState.STATE_STOPPED, PlaybackState.STATE_NONE -> "stopped"
             else -> return // transient error/skipping states: skip the update
         }
-        // Sessions that have never published metadata are not useful remotely.
         val metadata = controller.metadata
-        if (playbackState == "stopped" && !postedIds.contains(id)) {
+        if (playbackState == "stopped" && !snapshotTracker.isPosted(id)) {
             return
         }
 
-        val actions = state.actions
+        val artwork = artworkBitmap(metadata)
+        if (artwork != null) {
+            stats.artworkRequests.incrementAndGet()
+        }
+        val actions = playback.actions
+        val candidate = MediaSnapshotState(
+            playbackId = id,
+            appId = controller.packageName,
+            appName = appLabelCache.labelFor(controller.packageName),
+            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
+            artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            album = metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            playbackState = playbackState,
+            positionMs = playback.position.coerceAtLeast(0L),
+            durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.takeIf { it > 0L },
+            canPlay = canPlay(actions),
+            canPause = canPause(actions),
+            canSkipNext = actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L,
+            canSkipPrevious = actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L,
+            canSeek = actions and PlaybackState.ACTION_SEEK_TO != 0L,
+            artworkKey = artwork?.let(::artworkKeyFor),
+        )
+        val decision = snapshotTracker.evaluate(
+            candidate = candidate,
+            forceReplay = forcePosted,
+            artworkAvailable = artwork != null,
+        )
+        val eventType = decision.eventType ?: return
         val payload = mutableMapOf<String, Any?>(
-            "eventType" to if (!forcePosted && postedIds.contains(id)) "updated" else "posted",
-            "playbackId" to id,
+            "eventType" to eventType,
+            "playbackId" to candidate.playbackId,
             "sourcePlatform" to "android",
-            "appId" to controller.packageName,
-            "appName" to appLabelFor(controller.packageName),
-            "playbackState" to playbackState,
-            "positionMs" to state.position.coerceAtLeast(0L),
-            "canPlay" to canPlay(actions),
-            "canPause" to canPause(actions),
-            "canSkipNext" to (actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L),
-            "canSkipPrevious" to (actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L),
-            "canSeek" to (actions and PlaybackState.ACTION_SEEK_TO != 0L),
+            "appId" to candidate.appId,
+            "appName" to candidate.appName,
+            "playbackState" to candidate.playbackState,
+            "positionMs" to candidate.positionMs,
+            "canPlay" to candidate.canPlay,
+            "canPause" to candidate.canPause,
+            "canSkipNext" to candidate.canSkipNext,
+            "canSkipPrevious" to candidate.canSkipPrevious,
+            "canSeek" to candidate.canSeek,
             "updatedAt" to isoNow(),
         )
-        if (metadata != null) {
-            metadata.getString(MediaMetadata.METADATA_KEY_TITLE)?.let { payload["title"] = it }
-            metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)?.let { payload["artist"] = it }
-            metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)?.let { payload["album"] = it }
-            val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
-            if (duration > 0) {
-                payload["durationMs"] = duration
-            }
-            encodeArtwork(metadata)?.let { payload["artwork"] = it }
+        candidate.title?.let { payload["title"] = it }
+        candidate.artist?.let { payload["artist"] = it }
+        candidate.album?.let { payload["album"] = it }
+        candidate.durationMs?.let { payload["durationMs"] = it }
+        if (decision.includeArtwork && artwork != null) {
+            encodeArtwork(artwork)?.let { payload["artwork"] = it }
         }
 
-        postedIds.add(id)
         eventSink?.success(payload)
         payloadCallback?.invoke(payload)
     }
 
-    private fun encodeArtwork(metadata: MediaMetadata): Map<String, Any?>? {
-        val bitmap = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-            ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
-            ?: return null
+    private fun artworkBitmap(metadata: MediaMetadata?): Bitmap? =
+        metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+            ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+
+    private fun artworkKeyFor(bitmap: Bitmap): ArtworkKey = ArtworkKey(
+        identity = System.identityHashCode(bitmap),
+        generationId = bitmap.generationId,
+        width = bitmap.width,
+        height = bitmap.height,
+    )
+
+    private fun encodeArtwork(bitmap: Bitmap): Map<String, Any?>? {
+        stats.artworkEncodeStarted.incrementAndGet()
         val scaled = if (bitmap.width > artworkMaxDimension || bitmap.height > artworkMaxDimension) {
             val ratio = artworkMaxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
             Bitmap.createScaledBitmap(
@@ -296,13 +337,23 @@ class AndroidMediaSessionObserver(
         } else {
             bitmap
         }
-        val output = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.PNG, 90, output)
-        val bytes = output.toByteArray()
+        val bytes = try {
+            val output = ByteArrayOutputStream()
+            if (!scaled.compress(Bitmap.CompressFormat.PNG, 90, output)) {
+                return null
+            }
+            output.toByteArray()
+        } finally {
+            if (scaled !== bitmap) {
+                scaled.recycle()
+            }
+        }
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString(separator = "") { byte ->
                 "%02x".format(byte.toInt() and 0xff)
             }
+        stats.artworkEncodeCompleted.incrementAndGet()
+        stats.artworkBytesEncoded.addAndGet(bytes.size.toLong())
         return mapOf(
             "mimeType" to "image/png",
             "dataBase64" to Base64.encodeToString(bytes, Base64.NO_WRAP),
@@ -311,7 +362,7 @@ class AndroidMediaSessionObserver(
         )
     }
 
-    private fun appLabelFor(packageName: String): String {
+    private fun resolveAppLabel(packageName: String): String {
         return try {
             val info = context.packageManager.getApplicationInfo(packageName, 0)
             context.packageManager.getApplicationLabel(info).toString()
