@@ -9,6 +9,15 @@ internal interface IMacOSNotificationExtractorClient
     Task<MacOSExtractorStatus> GetStatusAsync(CancellationToken cancellationToken);
     Task<MacOSExtractorScanResult> ScanNotificationChangesAsync(long cursor, CancellationToken cancellationToken);
     Task<MacOSExtractorScanResult> RescanActiveNotificationsAsync(CancellationToken cancellationToken);
+    Task<MacOSNotificationActionBackendStatus> GetNotificationActionBackendStatusAsync(CancellationToken cancellationToken);
+    Task<MacOSNotificationActionCapabilities> GetNotificationActionCapabilitiesAsync(
+        string notificationId,
+        string packageName,
+        CancellationToken cancellationToken);
+    Task<MacOSNotificationDismissResult> DismissNotificationAsync(
+        string notificationId,
+        string packageName,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtractorClient
@@ -42,15 +51,63 @@ internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtra
     public Task<MacOSExtractorScanResult> RescanActiveNotificationsAsync(CancellationToken cancellationToken) =>
         SendAsync<MacOSExtractorScanResult>("rescanActiveNotifications", cursor: null, cancellationToken);
 
-    private async Task<T> SendAsync<T>(string operation, long? cursor, CancellationToken cancellationToken)
+    public Task<MacOSNotificationActionBackendStatus> GetNotificationActionBackendStatusAsync(
+        CancellationToken cancellationToken) =>
+        SendAsync<MacOSNotificationActionBackendStatus>(
+            "getNotificationActionBackendStatus",
+            cursor: null,
+            notificationId: null,
+            packageName: null,
+            cancellationToken);
+
+    public Task<MacOSNotificationActionCapabilities> GetNotificationActionCapabilitiesAsync(
+        string notificationId,
+        string packageName,
+        CancellationToken cancellationToken) =>
+        SendAsync<MacOSNotificationActionCapabilities>(
+            "getNotificationActionCapabilities",
+            cursor: null,
+            notificationId,
+            packageName,
+            cancellationToken);
+
+    public Task<MacOSNotificationDismissResult> DismissNotificationAsync(
+        string notificationId,
+        string packageName,
+        CancellationToken cancellationToken) =>
+        SendAsync<MacOSNotificationDismissResult>(
+            "dismissNotification",
+            cursor: null,
+            notificationId,
+            packageName,
+            cancellationToken);
+
+    private Task<T> SendAsync<T>(string operation, long? cursor, CancellationToken cancellationToken) =>
+        SendAsync<T>(operation, cursor, notificationId: null, packageName: null, cancellationToken);
+
+    private async Task<T> SendAsync<T>(
+        string operation,
+        long? cursor,
+        string? notificationId,
+        string? packageName,
+        CancellationToken cancellationToken)
     {
         var requestId = Guid.NewGuid().ToString("D");
-        var request = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        var requestObject = new Dictionary<string, object?>
         {
-            id = requestId,
-            operation,
-            cursor
-        }, JsonOptions));
+            ["id"] = requestId,
+            ["operation"] = operation,
+            ["cursor"] = cursor
+        };
+        if (notificationId is not null)
+        {
+            requestObject["notificationId"] = notificationId;
+        }
+        if (packageName is not null)
+        {
+            requestObject["packageName"] = packageName;
+        }
+        var request = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(requestObject, JsonOptions));
         if (request.Length > MaximumRequestBytes)
         {
             throw new MacOSExtractorException("requestTooLarge", "Rift Notification Extractor request exceeded 64 KiB.");
@@ -211,6 +268,30 @@ internal sealed class MacOSExtractedNotification
     public string PostedAt { get; init; } = string.Empty;
     public bool IsDismissible { get; init; }
     public bool IsOpenable { get; init; }
+}
+
+internal sealed class MacOSNotificationActionBackendStatus
+{
+    public string Backend { get; init; } = string.Empty;
+    public bool Available { get; init; }
+    public bool CanEnumerate { get; init; }
+    public bool CanDismiss { get; init; }
+    public string? Reason { get; init; }
+}
+
+internal sealed class MacOSNotificationActionCapabilities
+{
+    public string Backend { get; init; } = string.Empty;
+    public bool CanDismiss { get; init; }
+    public bool CanOpen { get; init; }
+    public string? Reason { get; init; }
+}
+
+internal sealed class MacOSNotificationDismissResult
+{
+    public string Backend { get; init; } = string.Empty;
+    public bool Success { get; init; }
+    public string Reason { get; init; } = string.Empty;
 }
 
 internal sealed class MacOSExtractorException(string code, string message) : Exception(message)

@@ -36,6 +36,7 @@
     <Compile Remove="Core\LinuxSecretServiceIdentityProtectionTests.cs" />
     <Compile Remove="Core\MacIpcListenerTests.cs" />
     <Compile Remove="Core\MacOSMediaPlaybackServiceTests.cs" />
+    <Compile Remove="Core\MacOSNotificationActionHandlerTests.cs" />
     <Compile Remove="Core\MacOSNotificationExtractorClientTests.cs" />
     <Compile Remove="Core\MacOSNotificationSyncObserverTests.cs" />
     <Compile Remove="Core\NotificationDatabaseReaderTests.cs" />

@@ -12,6 +12,9 @@ builder.Services.AddSingleton<IIpcListener, MacIpcListener>();
 builder.Services.AddSingleton<MacOSMediaPlaybackService>();
 builder.Services.AddSingleton<ILocalMediaPlaybackActionHandler>(sp => sp.GetRequiredService<MacOSMediaPlaybackService>());
 builder.Services.AddSingleton<IMacOSNotificationExtractorClient, MacOSNotificationExtractorClient>();
+builder.Services.AddSingleton<MacOSNotificationActionHandler>();
+builder.Services.AddSingleton<ILocalNotificationActionHandler>(sp =>
+    sp.GetRequiredService<MacOSNotificationActionHandler>());
 builder.Services.AddSingleton<MacOSNotificationSyncObserver>();
 builder.Services.AddHostedService<Worker>();
 builder.Services.AddHostedService<MacOSNetworkMonitor>();

@@ -75,6 +75,45 @@ public sealed class MacOSNotificationSyncObserverTests
         Assert.Equal(0, extractorClient.RescanCalls);
     }
 
+    [Fact]
+    public async Task ProcessIncrementalAsync_AdvertisesOnlyQualifiedDismissCapability()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var extractorClient = new StubExtractorClient { CanDismiss = true };
+        var observer = CreateObserver(syncService, extractorClient);
+
+        await observer.ProcessIncrementalAsync(
+            [CreateNotification("notification-ax", "Actionable")],
+            CancellationToken.None);
+
+        var published = Assert.Single(syncService.Events).Notification;
+        Assert.True(published.IsDismissible);
+        Assert.False(published.IsOpenable);
+        Assert.Equal(["notification-ax"], extractorClient.CapabilityNotificationIds);
+    }
+
+    [Fact]
+    public async Task RefreshActionCapabilitiesAsync_PublishesUpgradeAndDowngrade()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var extractorClient = new StubExtractorClient();
+        var observer = CreateObserver(syncService, extractorClient);
+        await observer.ProcessIncrementalAsync(
+            [CreateNotification("notification-dynamic", "Dynamic")],
+            CancellationToken.None);
+
+        extractorClient.CanDismiss = true;
+        await observer.RefreshActionCapabilitiesAsync(CancellationToken.None);
+        extractorClient.CanDismiss = false;
+        await observer.RefreshActionCapabilitiesAsync(CancellationToken.None);
+
+        Assert.Equal(["posted", "updated", "updated"], syncService.Events.Select(evt => evt.EventType));
+        Assert.Equal(
+            [false, true, false],
+            syncService.Events.Select(evt => evt.Notification.IsDismissible));
+        Assert.All(syncService.Events, evt => Assert.False(evt.Notification.IsOpenable));
+    }
+
     [Theory]
     [InlineData("dev.rift.app")]
     [InlineData("com.rift.app")]
@@ -118,9 +157,11 @@ public sealed class MacOSNotificationSyncObserverTests
     private sealed class StubExtractorClient : IMacOSNotificationExtractorClient
     {
         public MacOSExtractorScanResult ScanResult { get; init; } = new();
+        public bool CanDismiss { get; set; }
         public int ScanCalls { get; private set; }
         public int RescanCalls { get; private set; }
         public List<long> ScanCursors { get; } = [];
+        public List<string> CapabilityNotificationIds { get; } = [];
 
         public Task<MacOSExtractorStatus> GetStatusAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new MacOSExtractorStatus
@@ -143,6 +184,43 @@ public sealed class MacOSNotificationSyncObserverTests
             RescanCalls++;
             throw new NotSupportedException();
         }
+
+        public Task<MacOSNotificationActionBackendStatus> GetNotificationActionBackendStatusAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MacOSNotificationActionBackendStatus
+            {
+                Backend = "accessibility",
+                Available = CanDismiss,
+                CanEnumerate = CanDismiss,
+                CanDismiss = CanDismiss,
+                Reason = CanDismiss ? null : "exactIdentityUnavailable"
+            });
+
+        public Task<MacOSNotificationActionCapabilities> GetNotificationActionCapabilitiesAsync(
+            string notificationId,
+            string packageName,
+            CancellationToken cancellationToken)
+        {
+            CapabilityNotificationIds.Add(notificationId);
+            return Task.FromResult(new MacOSNotificationActionCapabilities
+            {
+                Backend = "accessibility",
+                CanDismiss = CanDismiss,
+                CanOpen = false,
+                Reason = CanDismiss ? null : "exactIdentityUnavailable"
+            });
+        }
+
+        public Task<MacOSNotificationDismissResult> DismissNotificationAsync(
+            string notificationId,
+            string packageName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MacOSNotificationDismissResult
+            {
+                Backend = "accessibility",
+                Success = CanDismiss,
+                Reason = CanDismiss ? "verified" : "exactIdentityUnavailable"
+            });
     }
 
     private sealed class StubIdentityManager : IIdentityManager

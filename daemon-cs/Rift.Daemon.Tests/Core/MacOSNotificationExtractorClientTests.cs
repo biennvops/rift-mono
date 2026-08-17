@@ -47,6 +47,53 @@ public sealed class MacOSNotificationExtractorClientTests
     }
 
     [Fact]
+    public async Task GetNotificationActionCapabilitiesAsync_SendsBoundedIdentityFields()
+    {
+        var client = CreateClient(request =>
+        {
+            Assert.Equal(
+                "getNotificationActionCapabilities",
+                request.RootElement.GetProperty("operation").GetString());
+            Assert.Equal("notification-1", request.RootElement.GetProperty("notificationId").GetString());
+            Assert.Equal("com.example.source", request.RootElement.GetProperty("packageName").GetString());
+            return SuccessResponse(
+                request,
+                "{\"backend\":\"accessibility\",\"canDismiss\":true,\"canOpen\":false}");
+        });
+
+        var capabilities = await client.GetNotificationActionCapabilitiesAsync(
+            "notification-1",
+            "com.example.source",
+            CancellationToken.None);
+
+        Assert.Equal("accessibility", capabilities.Backend);
+        Assert.True(capabilities.CanDismiss);
+        Assert.False(capabilities.CanOpen);
+    }
+
+    [Fact]
+    public async Task DismissNotificationAsync_ParsesVerifiedResult()
+    {
+        var client = CreateClient(request =>
+        {
+            Assert.Equal("dismissNotification", request.RootElement.GetProperty("operation").GetString());
+            Assert.Equal("notification-2", request.RootElement.GetProperty("notificationId").GetString());
+            Assert.Equal("com.example.source", request.RootElement.GetProperty("packageName").GetString());
+            return SuccessResponse(
+                request,
+                "{\"backend\":\"accessibility\",\"success\":true,\"reason\":\"verified\"}");
+        });
+
+        var result = await client.DismissNotificationAsync(
+            "notification-2",
+            "com.example.source",
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("verified", result.Reason);
+    }
+
+    [Fact]
     public async Task ScanNotificationChangesAsync_RejectsMalformedResponse()
     {
         var client = new MacOSNotificationExtractorClient(

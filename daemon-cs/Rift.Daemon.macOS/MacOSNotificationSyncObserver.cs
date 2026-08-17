@@ -9,10 +9,12 @@ internal sealed class MacOSNotificationSyncObserver(
     ILogger<MacOSNotificationSyncObserver> logger) : BackgroundService
 {
     private const int ExtractorPageSize = 64;
+    private const int MaximumCapabilityUpgradesPerPoll = 64;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<string, string> _fingerprints = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, MacOSExtractedNotification> _trackedNotifications = new(StringComparer.Ordinal);
     private long _cursor;
     private bool _cursorInitialized;
 
@@ -95,6 +97,7 @@ internal sealed class MacOSNotificationSyncObserver(
 
     internal async Task PollOnceAsync(CancellationToken cancellationToken)
     {
+        await RefreshActionCapabilitiesAsync(cancellationToken).ConfigureAwait(false);
         var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
         await ProcessIncrementalAsync(scan.Notifications, cancellationToken).ConfigureAwait(false);
         _cursor = Math.Max(_cursor, scan.Cursor);
@@ -119,16 +122,20 @@ internal sealed class MacOSNotificationSyncObserver(
                 continue;
             }
 
-            var fingerprint = CreateFingerprint(notification);
-            var eventType = _fingerprints.ContainsKey(notification.NotificationId) ? "updated" : "posted";
-            if (_fingerprints.TryGetValue(notification.NotificationId, out var previousFingerprint) &&
+            var actionableNotification = await ResolveActionCapabilitiesAsync(notification, cancellationToken)
+                .ConfigureAwait(false);
+            var fingerprint = CreateFingerprint(actionableNotification);
+            var eventType = _fingerprints.ContainsKey(actionableNotification.NotificationId) ? "updated" : "posted";
+            if (_fingerprints.TryGetValue(actionableNotification.NotificationId, out var previousFingerprint) &&
                 string.Equals(previousFingerprint, fingerprint, StringComparison.Ordinal))
             {
+                _trackedNotifications[actionableNotification.NotificationId] = actionableNotification;
                 continue;
             }
 
-            var result = await PublishAsync(eventType, notification, removedAt: null, cancellationToken).ConfigureAwait(false);
-            _fingerprints[notification.NotificationId] = fingerprint;
+            var result = await PublishAsync(eventType, actionableNotification, removedAt: null, cancellationToken).ConfigureAwait(false);
+            _fingerprints[actionableNotification.NotificationId] = fingerprint;
+            _trackedNotifications[actionableNotification.NotificationId] = actionableNotification;
             logger.LogInformation(
                 "macOS notification {EventType} processed (suppressed={Suppressed}, broadcastPeers={BroadcastPeerCount}).",
                 eventType,
@@ -136,6 +143,81 @@ internal sealed class MacOSNotificationSyncObserver(
                 result.BroadcastTo.Count);
         }
     }
+
+    internal async Task RefreshActionCapabilitiesAsync(CancellationToken cancellationToken)
+    {
+        var currentlyDismissible = _trackedNotifications.Values
+            .Where(notification => notification.IsDismissible)
+            .ToArray();
+        var upgradeCandidates = _trackedNotifications.Values
+            .Where(notification => !notification.IsDismissible)
+            .OrderByDescending(notification => notification.PostedAt, StringComparer.Ordinal)
+            .Take(MaximumCapabilityUpgradesPerPoll)
+            .ToArray();
+
+        foreach (var notification in currentlyDismissible.Concat(upgradeCandidates))
+        {
+            var updated = await ResolveActionCapabilitiesAsync(notification, cancellationToken)
+                .ConfigureAwait(false);
+            if (updated.IsDismissible == notification.IsDismissible &&
+                updated.IsOpenable == notification.IsOpenable)
+            {
+                continue;
+            }
+
+            await PublishAsync("updated", updated, removedAt: null, cancellationToken).ConfigureAwait(false);
+            _trackedNotifications[updated.NotificationId] = updated;
+            _fingerprints[updated.NotificationId] = CreateFingerprint(updated);
+            logger.LogInformation(
+                "macOS notification action capability changed (dismissible={IsDismissible}).",
+                updated.IsDismissible);
+        }
+    }
+
+    private async Task<MacOSExtractedNotification> ResolveActionCapabilitiesAsync(
+        MacOSExtractedNotification notification,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var capabilities = await extractorClient.GetNotificationActionCapabilitiesAsync(
+                    notification.NotificationId,
+                    notification.PackageName,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return CloneNotification(
+                notification,
+                isDismissible: capabilities.CanDismiss,
+                isOpenable: false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (MacOSExtractorException ex)
+        {
+            logger.LogDebug(
+                "macOS notification action capability unavailable ({Code}): {Message}",
+                ex.Code,
+                ex.Message);
+            return CloneNotification(notification, isDismissible: false, isOpenable: false);
+        }
+    }
+
+    private static MacOSExtractedNotification CloneNotification(
+        MacOSExtractedNotification notification,
+        bool isDismissible,
+        bool isOpenable) => new()
+        {
+            NotificationId = notification.NotificationId,
+            PackageName = notification.PackageName,
+            AppName = notification.AppName,
+            Title = notification.Title,
+            BodyPreview = notification.BodyPreview,
+            PostedAt = notification.PostedAt,
+            IsDismissible = isDismissible,
+            IsOpenable = isOpenable
+        };
 
     private Task<NotifyLocalNotificationEventResult> PublishAsync(
         string eventType,
@@ -154,8 +236,8 @@ internal sealed class MacOSNotificationSyncObserver(
                 Title = notification.Title,
                 BodyPreview = notification.BodyPreview,
                 PostedAt = notification.PostedAt,
-                IsDismissible = false,
-                IsOpenable = false
+                IsDismissible = notification.IsDismissible,
+                IsOpenable = notification.IsOpenable
             },
             removedAt,
             cancellationToken);
@@ -170,7 +252,9 @@ internal sealed class MacOSNotificationSyncObserver(
         notification.AppName,
         notification.Title ?? string.Empty,
         notification.BodyPreview ?? string.Empty,
-        notification.PostedAt);
+        notification.PostedAt,
+        notification.IsDismissible ? "1" : "0",
+        notification.IsOpenable ? "1" : "0");
 
     private static string GetStatusMessage(string state) => state switch
     {

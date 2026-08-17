@@ -77,6 +77,8 @@ protocol MacOSNotificationActionBackend {
 func makeMacOSNotificationActionBackend() -> any MacOSNotificationActionBackend {
 #if RIFT_PRIVATE_API && RIFT_PRIVATE_NOTIFICATION_ACTIONS
     PrivateMacOSNotificationActionBackend()
+#elseif RIFT_ACCESSIBILITY_NOTIFICATION_ACTIONS
+    AccessibilityMacOSNotificationActionBackend()
 #else
     NotCompiledMacOSNotificationActionBackend()
 #endif
@@ -179,7 +181,7 @@ private final class PrivateMacOSNotificationActionBackend: MacOSNotificationActi
     }
 }
 
-#else
+#endif
 
 private final class NotCompiledMacOSNotificationActionBackend: MacOSNotificationActionBackend {
     func status() -> MacOSNotificationActionBackendStatus {
@@ -212,5 +214,3 @@ private final class NotCompiledMacOSNotificationActionBackend: MacOSNotification
             reason: "notCompiled")
     }
 }
-
-#endif
