@@ -135,6 +135,24 @@ void main() {
     expect(windowsCalls.single.arguments['iconBytes'], iconBytes);
   });
 
+  test('AndroidShell forwards foreground sync status payload', () async {
+    final shown = await AndroidShell.updateForegroundSyncStatus(
+      runtimeState: 'ready',
+      trustedPeerCount: 3,
+      connectedPeerCount: 2,
+      connectedPeerNames: const ['Fedora Workstation', 'MacBook Pro'],
+    );
+
+    expect(shown, isTrue);
+    expect(androidCalls.single.method, 'updateForegroundSyncStatus');
+    expect(androidCalls.single.arguments, <String, Object?>{
+      'runtimeState': 'ready',
+      'trustedPeerCount': 3,
+      'connectedPeerCount': 2,
+      'connectedPeerNames': const ['Fedora Workstation', 'MacBook Pro'],
+    });
+  });
+
   test('desktop bridges forward keyed clear requests', () async {
     expect(await LinuxNotifications.clearNotification('linux-key'), isTrue);
     expect(await WindowsShell.clearNotification('windows-key'), isTrue);
