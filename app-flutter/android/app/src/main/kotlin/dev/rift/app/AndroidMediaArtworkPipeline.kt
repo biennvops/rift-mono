@@ -11,7 +11,7 @@ internal data class EncodedMediaArtwork(
     val sha256: String,
 ) {
     fun asMap(): Map<String, Any?> = mapOf(
-        "mimeType" to mimeType,
+        "mediaType" to mimeType,
         "dataBase64" to dataBase64,
         "byteSize" to byteSize,
         "sha256" to sha256,

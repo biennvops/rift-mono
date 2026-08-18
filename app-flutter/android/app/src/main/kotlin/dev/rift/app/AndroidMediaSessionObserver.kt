@@ -420,6 +420,12 @@ class AndroidMediaSessionObserver(
             stats.artworkEncodeDiscardedStale.incrementAndGet()
             return
         }
+        Log.d(
+            tag,
+            "[MediaArtwork] encoded playback=$playbackId " +
+                "type=${artwork.mimeType} bytes=${artwork.byteSize} " +
+                "sha=${artwork.sha256.take(8)}",
+        )
         val decision = snapshotTracker.artworkReady(
             playbackId = playbackId,
             generation = snapshotGeneration,

@@ -10,6 +10,26 @@ import org.junit.Test
 
 class AndroidMediaArtworkPipelineTest {
     @Test
+    fun encodedArtworkUsesCanonicalProtocolFields() {
+        val expectedBase64 = "iVBORw0KGgo="
+        val expectedSha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        val artwork = EncodedMediaArtwork(
+            mimeType = "image/png",
+            dataBase64 = expectedBase64,
+            byteSize = 8,
+            sha256 = expectedSha,
+        )
+
+        val payload = artwork.asMap()
+
+        assertEquals("image/png", payload["mediaType"])
+        assertFalse(payload.containsKey("mimeType"))
+        assertEquals(expectedBase64, payload["dataBase64"])
+        assertEquals(8, payload["byteSize"])
+        assertEquals(expectedSha, payload["sha256"])
+    }
+
+    @Test
     fun cachedArtworkAvoidsAnotherEncode() {
         val executor = QueuedExecutor()
         val dispatcher = QueuedDispatcher()
