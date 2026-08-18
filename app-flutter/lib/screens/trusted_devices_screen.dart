@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -496,6 +497,24 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     int generation,
     Color? fallbackAccent,
   ) async {
+    if (kDebugMode) {
+      final rawArtwork = artworkPayload is Map ? artworkPayload : null;
+      final artworkKeys = rawArtwork == null
+          ? const <String>[]
+          : rawArtwork.keys
+              .map((key) => key.toString())
+              .toList(growable: false);
+      final playbackId =
+          _playbacksByKey[playbackKey]?['playbackId']?.toString() ??
+              playbackKey;
+      debugPrint(
+        '[MediaArtwork] received '
+        'playback=$playbackId '
+        'hasArtwork=${rawArtwork != null} '
+        'artworkKeys=$artworkKeys '
+        'pending=${_playbacksByKey[playbackKey]?['artworkPending'] == true}',
+      );
+    }
     final artwork =
         await _playbackArtworkCache.resolve(playbackKey, artworkPayload);
     if (!mounted ||

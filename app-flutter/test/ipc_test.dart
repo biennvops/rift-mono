@@ -642,6 +642,33 @@ void main() {
       });
     });
 
+    test('should canonicalize C# ArtworkPending media events', () async {
+      await client.connect();
+
+      final eventFuture = client.onMediaPlaybackUpdated.first;
+      transport.emitNotification('rift.onMediaPlaybackUpdated', {
+        'PlaybackId': 'session',
+        'SourceDeviceId': 'android-peer',
+        'AppId': 'com.example.music',
+        'AppName': 'Example Music',
+        'PlaybackState': 'playing',
+        'PositionMs': 1000,
+        'CanPlay': true,
+        'CanPause': true,
+        'CanSkipNext': true,
+        'CanSkipPrevious': true,
+        'CanSeek': true,
+        'UpdatedAt': '2026-07-16T10:00:00Z',
+        'ArtworkPending': true,
+      });
+
+      final payload = await eventFuture;
+      expect(payload['playbackId'], 'session');
+      expect(payload['sourceDeviceId'], 'android-peer');
+      expect(payload['artworkPending'], isTrue);
+      expect(payload.containsKey('ArtworkPending'), isFalse);
+    });
+
     test('should deliver clipboard notifications with canonicalized fields',
         () async {
       await client.connect();

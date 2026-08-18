@@ -21,11 +21,15 @@ Map<String, dynamic> mediaEvent(
   String eventType,
   String playbackId, {
   int? revision,
+  Map<String, dynamic>? artwork,
+  bool artworkPending = false,
 }) {
   return <String, dynamic>{
     'eventType': eventType,
     'playbackId': playbackId,
     if (revision != null) 'revision': revision,
+    if (artwork != null) 'artwork': artwork,
+    if (artworkPending) 'artworkPending': true,
   };
 }
 
@@ -299,6 +303,104 @@ void main() {
       expect(event.eventType, 'posted');
       expect(event.payload['eventType'], 'posted');
       expect(event.payload['revision'], 3);
+    });
+
+    test('media artwork survives posted and updated coalescing', () {
+      const artworkA = <String, dynamic>{
+        'mediaType': 'image/png',
+        'dataBase64': 'AAAA',
+        'byteSize': 3,
+        'sha256':
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      };
+      const artworkB = <String, dynamic>{
+        'mediaType': 'image/png',
+        'dataBase64': 'BBBB',
+        'byteSize': 3,
+        'sha256':
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      };
+      final queue = AndroidNativeEventQueue(dispatch: deliver);
+
+      queue.enqueue(
+        mediaEvent('posted', 'android-session', artwork: artworkA),
+      );
+      queue.enqueue(
+        mediaEvent('updated', 'android-session', artwork: artworkB),
+      );
+
+      expect(queue.length, 1);
+      final event = queue.queuedEvents.single;
+      expect(event.eventType, 'posted');
+      expect(event.payload['artwork'], artworkB);
+      expect(event.payload.containsKey('artworkPending'), isFalse);
+    });
+
+    test('pending artwork coalesces to the later encoded artwork', () async {
+      const artwork = <String, dynamic>{
+        'mediaType': 'image/png',
+        'dataBase64': 'AAAA',
+        'byteSize': 3,
+        'sha256':
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      };
+      final dispatched = <Map<String, dynamic>>[];
+      final queue = AndroidNativeEventQueue(
+        dispatch: (event) async {
+          dispatched.add(event.payload);
+          return AndroidNativeEventDispatchResult.delivered;
+        },
+      )..onConnected();
+
+      queue.enqueue(
+        mediaEvent('updated', 'android-session', artworkPending: true),
+      );
+      queue.enqueue(
+        mediaEvent('updated', 'android-session', artwork: artwork),
+      );
+
+      expect(queue.length, 1);
+      expect(queue.queuedEvents.single.payload['artwork'], artwork);
+      expect(queue.queuedEvents.single.payload.containsKey('artworkPending'),
+          isFalse);
+      await queue.flush();
+
+      expect(dispatched, hasLength(1));
+      expect(dispatched.single['artwork'], artwork);
+    });
+
+    test('final encoded artwork is not lost after a pending replacement', () {
+      const artworkA = <String, dynamic>{
+        'mediaType': 'image/png',
+        'dataBase64': 'AAAA',
+        'byteSize': 3,
+        'sha256':
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      };
+      const artworkB = <String, dynamic>{
+        'mediaType': 'image/png',
+        'dataBase64': 'BBBB',
+        'byteSize': 3,
+        'sha256':
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      };
+      final queue = AndroidNativeEventQueue(dispatch: deliver);
+
+      queue.enqueue(
+        mediaEvent('updated', 'android-session', artwork: artworkA),
+      );
+      queue.enqueue(
+        mediaEvent('updated', 'android-session', artworkPending: true),
+      );
+      expect(queue.queuedEvents.single.payload['artworkPending'], isTrue);
+
+      queue.enqueue(
+        mediaEvent('updated', 'android-session', artwork: artworkB),
+      );
+
+      final event = queue.queuedEvents.single;
+      expect(event.payload['artwork'], artworkB);
+      expect(event.payload.containsKey('artworkPending'), isFalse);
     });
 
     test('one hundred media updates coalesce to the latest state', () {
