@@ -351,7 +351,6 @@ class AndroidForegroundSyncStatusController {
     } catch (error) {
       _logger?.call('Foreground sync peer refresh failed: $error');
       if (!_disposed) {
-        _lastPeerSnapshot ??= const _PeerSnapshot.empty();
         await _publishCurrentStatus();
       }
     }
@@ -372,8 +371,13 @@ class AndroidForegroundSyncStatusController {
     if (!_started || _disposed) {
       return;
     }
-    final snapshot = _lastPeerSnapshot ?? const _PeerSnapshot.empty();
-    final status = snapshot.toStatus(_runtimeState);
+    final snapshot = _lastPeerSnapshot;
+    if (snapshot == null &&
+        _runtimeState == AndroidForegroundSyncRuntimeState.ready) {
+      return;
+    }
+    final status =
+        (snapshot ?? const _PeerSnapshot.empty()).toStatus(_runtimeState);
     if (_lastPublishedStatus == status) {
       return;
     }

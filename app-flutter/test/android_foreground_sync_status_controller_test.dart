@@ -279,7 +279,7 @@ void main() {
       });
     });
 
-    test('list failures are non-fatal and later refreshes recover', () async {
+    test('initial lookup failure does not claim zero trusted peers', () async {
       var fail = true;
       controller = AndroidForegroundSyncStatusController(
         listTrustedPeers: () async {
@@ -296,13 +296,51 @@ void main() {
       );
 
       await controller.start();
-      expect(published, hasLength(1));
-      expect(published.single.runtimeState,
-          AndroidForegroundSyncRuntimeState.ready);
-      expect(published.single.trustedPeerCount, 0);
+      expect(published, isEmpty);
+
       fail = false;
       await controller.refreshNow();
       expect(published, hasLength(1));
+      expect(
+        published.single.runtimeState,
+        AndroidForegroundSyncRuntimeState.ready,
+      );
+      expect(published.single.trustedPeerCount, 0);
+    });
+
+    test('lookup failure retains the last known peer snapshot', () async {
+      var fail = false;
+      response = {
+        'peers': [
+          {
+            'deviceId': 'peer-1',
+            'trustState': 'trusted',
+            'presence': 'online',
+            'displayName': 'MacBook Pro',
+          },
+        ],
+      };
+      controller = AndroidForegroundSyncStatusController(
+        listTrustedPeers: () async {
+          if (fail) {
+            throw StateError('daemon unavailable');
+          }
+          return response;
+        },
+        publishForegroundSyncStatus: (status) async {
+          published.add(status);
+          return true;
+        },
+        healingRefreshInterval: const Duration(hours: 1),
+      );
+      await controller.start();
+      expect(published, hasLength(1));
+      expect(published.single.connectedPeerNames, ['MacBook Pro']);
+
+      fail = true;
+      await controller.refreshNow();
+      expect(published, hasLength(1));
+      expect(published.single.connectedPeerNames, ['MacBook Pro']);
     });
 
     test('dispose cancels pending work and prevents publication', () async {
