@@ -72,6 +72,7 @@ class AndroidMediaPlaybackPublisher {
       if (event['album'] != null) 'album': event['album']?.toString(),
       if (event['artwork'] is Map)
         'artwork': normalizeAndroidMediaArtwork(event['artwork'] as Map),
+      if (event['artworkPending'] == true) 'artworkPending': true,
       if (event['playbackState'] != null)
         'playbackState': event['playbackState']?.toString(),
       if (event['positionMs'] is num)

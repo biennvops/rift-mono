@@ -512,6 +512,49 @@ void main() {
       },
     );
 
+    test(
+      'preserves pending artwork hints through daemon state and IPC',
+      () async {
+        const peerDeviceId = 'rift-peer-device';
+        configureMediaPlaybackPeer(peerDeviceId);
+        await daemon.handleMediaPlaybackProtocolMessageForTesting(
+          peerDeviceId,
+          {
+            'type': 'media.playbackPosted',
+            'payload': {
+              'playbackId': 'pending-playback',
+              'sourceDeviceId': peerDeviceId,
+              'appId': 'com.example.music',
+              'appName': 'Example Music',
+              'artworkPending': true,
+              'playbackState': 'playing',
+              'positionMs': 1000,
+              'updatedAt': '2026-07-16T10:00:00.000Z',
+              'canPlay': true,
+              'canPause': true,
+              'canSkipNext': true,
+              'canSkipPrevious': true,
+              'canSeek': true,
+            },
+          },
+        );
+
+        final playback = await daemon.handleJsonRpcRequest({
+          'method': 'rift.getMediaPlayback',
+          'params': {
+            'sourceDeviceId': peerDeviceId,
+            'playbackId': 'pending-playback',
+          },
+        });
+        expect(playback['artwork'], isNull);
+        expect(playback['artworkPending'], isTrue);
+        final posted = ipcEvents.lastWhere(
+          (event) => event['method'] == 'rift.onMediaPlaybackPosted',
+        );
+        expect((posted['params'] as Map)['artworkPending'], isTrue);
+      },
+    );
+
     test('clears remote playback when its peer session disconnects', () async {
       const peerDeviceId = 'rift-peer-device';
       configureMediaPlaybackPeer(peerDeviceId);

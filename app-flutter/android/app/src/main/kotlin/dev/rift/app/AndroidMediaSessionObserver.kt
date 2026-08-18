@@ -337,6 +337,7 @@ class AndroidMediaSessionObserver(
                 state = candidate,
                 eventType = eventType,
                 artwork = if (decision.includeArtwork) artworkLookup?.value else null,
+                artworkPending = decision.artworkPending,
             )
         }
 
@@ -352,15 +353,24 @@ class AndroidMediaSessionObserver(
                 key = artworkKey,
                 source = artworkSource,
                 requesterId = id,
-            ) { encoded ->
-                acceptArtwork(
-                    observationGeneration = requestedObservationGeneration,
-                    playbackId = id,
-                    snapshotGeneration = decision.generation,
-                    artworkKey = artworkKey,
-                    artwork = encoded,
-                )
-            }
+                onReady = { encoded ->
+                    acceptArtwork(
+                        observationGeneration = requestedObservationGeneration,
+                        playbackId = id,
+                        snapshotGeneration = decision.generation,
+                        artworkKey = artworkKey,
+                        artwork = encoded,
+                    )
+                },
+                onFailure = {
+                    rejectArtwork(
+                        observationGeneration = requestedObservationGeneration,
+                        playbackId = id,
+                        snapshotGeneration = decision.generation,
+                        artworkKey = artworkKey,
+                    )
+                },
+            )
         }
     }
 
@@ -368,6 +378,7 @@ class AndroidMediaSessionObserver(
         state: MediaSnapshotState,
         eventType: String,
         artwork: EncodedMediaArtwork?,
+        artworkPending: Boolean = false,
     ) {
         val payload = mutableMapOf<String, Any?>(
             "eventType" to eventType,
@@ -388,6 +399,7 @@ class AndroidMediaSessionObserver(
         state.artist?.let { payload["artist"] = it }
         state.album?.let { payload["album"] = it }
         state.durationMs?.let { payload["durationMs"] = it }
+        if (artworkPending) payload["artworkPending"] = true
         artwork?.let { payload["artwork"] = it.asMap() }
 
         eventSink?.success(payload)
@@ -419,6 +431,37 @@ class AndroidMediaSessionObserver(
             return
         }
         publishSnapshot(current.state, decision.eventType, artwork)
+    }
+
+    private fun rejectArtwork(
+        observationGeneration: Long,
+        playbackId: String,
+        snapshotGeneration: Long,
+        artworkKey: ArtworkKey,
+    ) {
+        if (
+            observationGeneration != this.observationGeneration ||
+            playbackId !in controllersById
+        ) {
+            stats.artworkEncodeDiscardedStale.incrementAndGet()
+            return
+        }
+        val decision = snapshotTracker.artworkUnavailable(
+            playbackId = playbackId,
+            generation = snapshotGeneration,
+            artworkKey = artworkKey,
+        )
+        val current = snapshotTracker.current(playbackId)
+        if (decision?.eventType == null || current == null) {
+            stats.artworkEncodeDiscardedStale.incrementAndGet()
+            return
+        }
+        publishSnapshot(
+            state = current.state,
+            eventType = decision.eventType,
+            artwork = null,
+            artworkPending = decision.artworkPending,
+        )
     }
 
     private fun artworkBitmap(metadata: MediaMetadata?): Bitmap? =

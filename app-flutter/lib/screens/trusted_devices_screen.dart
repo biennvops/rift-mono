@@ -88,6 +88,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       ({
         bool removed,
         bool hasArtworkUpdate,
+        bool artworkPending,
         Object? artworkPayload,
         Map<String, dynamic> playback,
       })> _playbackMutationsDuringLoad = [];
@@ -394,6 +395,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         if (key == null) continue;
         if (playback.containsKey('artwork')) {
           artworkPayloads[key] = playback.remove('artwork');
+        } else if (playback['artworkPending'] != true) {
+          artworkPayloads[key] = null;
         }
         loaded[key] = playback;
       }
@@ -407,6 +410,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           loaded[key] = mutation.playback;
           if (mutation.hasArtworkUpdate) {
             artworkPayloads[key] = mutation.artworkPayload;
+          } else if (!mutation.artworkPending) {
+            artworkPayloads.remove(key);
           }
         }
       }
@@ -441,11 +446,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final key = mediaPlaybackKey(playback);
     if (key == null || !mounted) return;
     final hasArtworkUpdate = playback.containsKey('artwork');
+    final artworkPending =
+        playback['artworkPending'] == true && !hasArtworkUpdate;
     final artworkPayload = hasArtworkUpdate ? playback.remove('artwork') : null;
     if (_isLoadingPlayback) {
       _playbackMutationsDuringLoad.add((
         removed: false,
         hasArtworkUpdate: hasArtworkUpdate,
+        artworkPending: artworkPending,
         artworkPayload: artworkPayload,
         playback: playback,
       ));
@@ -456,7 +464,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     setState(() {
       _playbacksByKey[key] = playback;
     });
-    if (hasArtworkUpdate) {
+    if (hasArtworkUpdate || !artworkPending) {
       _startPlaybackArtworkResolution(
         key,
         artworkPayload,
@@ -523,6 +531,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _playbackMutationsDuringLoad.add((
         removed: true,
         hasArtworkUpdate: false,
+        artworkPending: false,
         artworkPayload: null,
         playback: playback,
       ));

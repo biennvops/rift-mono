@@ -11,6 +11,7 @@ public sealed class MediaPlaybackRecord
     public string? Artist { get; init; }
     public string? Album { get; init; }
     public IReadOnlyDictionary<string, object?>? Artwork { get; init; }
+    public bool ArtworkPending { get; init; }
     public string PlaybackState { get; init; } = string.Empty;
     public long PositionMs { get; init; }
     public long? DurationMs { get; init; }

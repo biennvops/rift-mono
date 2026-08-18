@@ -1992,6 +1992,7 @@ void main() {
       'playbackState': 'paused',
       'positionMs': 42000,
       'updatedAt': '2026-08-01T10:02:00Z',
+      'artworkPending': true,
     });
     await tester.pumpAndSettle();
     expect(
@@ -2041,6 +2042,42 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('device-focus-media-artwork-placeholder')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-panel-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-close')));
+    await tester.pumpAndSettle();
+
+    await client.emitMediaUpdated({
+      'sourceDeviceId': 'peer-a',
+      'playbackId': 'shared-session',
+      'appName': 'Player A',
+      'title': 'Track B (no artwork)',
+      'playbackState': 'paused',
+      'positionMs': 43000,
+      'updatedAt': '2026-08-01T10:02:30Z',
+    });
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor,
+      isNull,
+    );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-accented-peer-a')),
+      findsNothing,
+    );
+
+    await tester.tap(peerFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-media')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-focus-media-artwork-placeholder')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(ValueKey('device-focus-media-artwork-$redIdentity')),
       findsNothing,
     );
     await tester.tap(find.byKey(const ValueKey('device-focus-panel-close')));
@@ -2115,7 +2152,7 @@ void main() {
   });
 
   testWidgets(
-    'retains loaded artwork across a live artwork-less playback update',
+    'retains loaded artwork across a pending artwork update',
     (WidgetTester tester) async {
       tester.view.physicalSize = const Size(1400, 900);
       tester.view.devicePixelRatio = 1;
@@ -2160,6 +2197,7 @@ void main() {
         'playbackState': 'paused',
         'positionMs': 42000,
         'updatedAt': '2026-08-01T10:01:00Z',
+        'artworkPending': true,
       });
       await tester.pump();
 

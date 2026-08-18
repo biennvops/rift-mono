@@ -8,6 +8,7 @@ class MediaPlaybackRecord {
   final String? artist;
   final String? album;
   final Map<String, dynamic>? artwork;
+  final bool artworkPending;
   final String playbackState;
   final int positionMs;
   final int? durationMs;
@@ -30,6 +31,7 @@ class MediaPlaybackRecord {
     this.artist,
     this.album,
     this.artwork,
+    this.artworkPending = false,
     required this.playbackState,
     required this.positionMs,
     this.durationMs,
@@ -53,6 +55,7 @@ class MediaPlaybackRecord {
     if (artist != null) 'artist': artist,
     if (album != null) 'album': album,
     if (artwork != null) 'artwork': artwork,
+    if (artworkPending) 'artworkPending': true,
     'playbackState': playbackState,
     'positionMs': positionMs,
     if (durationMs != null) 'durationMs': durationMs,

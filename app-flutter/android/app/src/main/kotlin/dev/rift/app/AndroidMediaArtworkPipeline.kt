@@ -59,8 +59,13 @@ internal class ArtworkPipeline<K, S, V : Any>(
     private val onEncodeCompleted: (V) -> Unit = {},
     private val onDiscarded: () -> Unit = {},
 ) {
+    private data class Listener<V : Any>(
+        val onReady: (V) -> Unit,
+        val onFailure: () -> Unit,
+    )
+
     private class Work<V : Any> {
-        val listenersByRequester = LinkedHashMap<String, (V) -> Unit>()
+        val listenersByRequester = LinkedHashMap<String, Listener<V>>()
     }
 
     private val cache = BoundedArtworkCache<K, V>(cacheEntries)
@@ -89,6 +94,7 @@ internal class ArtworkPipeline<K, S, V : Any>(
         source: S,
         requesterId: String,
         onReady: (V) -> Unit,
+        onFailure: () -> Unit = {},
     ) {
         if (!active) return
         onRequest()
@@ -101,14 +107,15 @@ internal class ArtworkPipeline<K, S, V : Any>(
             return
         }
 
+        val listener = Listener(onReady = onReady, onFailure = onFailure)
         val existing = inFlightByKey[key]
         if (existing != null) {
-            existing.listenersByRequester[requesterId] = onReady
+            existing.listenersByRequester[requesterId] = listener
             return
         }
 
         val work = Work<V>()
-        work.listenersByRequester[requesterId] = onReady
+        work.listenersByRequester[requesterId] = listener
         inFlightByKey[key] = work
         try {
             executor.execute {
@@ -134,7 +141,17 @@ internal class ArtworkPipeline<K, S, V : Any>(
                 inFlightByKey.remove(key)
             }
             onDiscarded()
+            onFailure()
         }
+    }
+
+    fun request(
+        key: K,
+        source: S,
+        requesterId: String,
+        onReady: (V) -> Unit,
+    ) {
+        request(key, source, requesterId, onReady, {})
     }
 
     fun removeRequester(requesterId: String) {
@@ -157,7 +174,12 @@ internal class ArtworkPipeline<K, S, V : Any>(
             return
         }
         inFlightByKey.remove(key)
-        if (encoded == null) return
+        if (encoded == null) {
+            work.listenersByRequester.values.forEach { listener ->
+                listener.onFailure()
+            }
+            return
+        }
         cache.put(key, encoded)
 
         val listeners = work.listenersByRequester.values.toList()
@@ -165,6 +187,6 @@ internal class ArtworkPipeline<K, S, V : Any>(
             onDiscarded()
             return
         }
-        listeners.forEach { listener -> listener(encoded) }
+        listeners.forEach { listener -> listener.onReady(encoded) }
     }
 }
