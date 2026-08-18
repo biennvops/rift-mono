@@ -166,6 +166,7 @@ public sealed class SendQueueServiceTests
             fileTransfer.OfferException = null;
             transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: true));
             await WaitForStatusAsync(service, result.QueueItemId, "dispatching");
+            await WaitForOfferCallCountAsync(fileTransfer, 2);
 
             var retried = await service.GetSendQueueItemAsync(result.QueueItemId, CancellationToken.None);
             Assert.Equal("dispatching", retried.Status);
@@ -379,6 +380,7 @@ public sealed class SendQueueServiceTests
 
             transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: true));
             await WaitForStatusAsync(service, "queue-1", "dispatching");
+            await WaitForOfferCallCountAsync(fileTransfer, 1);
 
             var retried = await service.GetSendQueueItemAsync("queue-1", CancellationToken.None);
             Assert.Equal("dispatching", retried.Status);
@@ -532,6 +534,21 @@ public sealed class SendQueueServiceTests
             {
                 throw new TimeoutException(
                     $"Queue item {queueItemId} did not reach status '{expectedStatus}' (last: '{item.Status}').");
+            }
+
+            await Task.Delay(20);
+        }
+    }
+
+    private static async Task WaitForOfferCallCountAsync(FakeFileTransferService fileTransfer, int expectedCount)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (fileTransfer.OfferCallCount < expectedCount)
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"OfferFileAsync was called {fileTransfer.OfferCallCount} times; expected at least {expectedCount}.");
             }
 
             await Task.Delay(20);
