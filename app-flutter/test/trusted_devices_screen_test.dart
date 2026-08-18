@@ -92,6 +92,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     }
   ];
   List<Map<String, dynamic>> mediaPlaybacks = [];
+  Completer<dynamic>? listMediaPlaybackCompleter;
   final Map<String, Map<String, dynamic>> peerDeviceStatuses = {};
   Map<String, dynamic> deviceInfo = {
     'deviceId': 'rift-local-device',
@@ -152,7 +153,12 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
         'isDiscovering': isDiscovering,
       };
   @override
-  Future<dynamic> listMediaPlayback() async => {'playbacks': mediaPlaybacks};
+  Future<dynamic> listMediaPlayback() async {
+    final completer = listMediaPlaybackCompleter;
+    if (completer != null) return completer.future;
+    return {'playbacks': mediaPlaybacks};
+  }
+
   @override
   Future<dynamic> getPeerDeviceStatus(String deviceId) async {
     final status = peerDeviceStatuses[deviceId];
@@ -1876,6 +1882,8 @@ void main() {
     final blueArtwork = await tester.runAsync(
       () => _solidArtwork(const Color(0xFF2457D6)),
     );
+    final redIdentity = redArtwork!['sha256']?.toString() ?? '';
+    final blueIdentity = blueArtwork!['sha256']?.toString() ?? '';
     final client = FakeJsonRpcRiftClient()
       ..trustedPeers = [
         {
@@ -1971,14 +1979,19 @@ void main() {
       findsOneWidget,
     );
 
+    final peerFinder = find.byKey(const ValueKey('trusted-orbit-peer-peer-a'));
+    final initialRedAccent =
+        tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
+    expect(initialRedAccent, isNotNull);
+
     await client.emitMediaUpdated({
       'sourceDeviceId': 'peer-a',
       'playbackId': 'shared-session',
       'appName': 'Player A',
       'title': 'Track A',
       'playbackState': 'paused',
+      'positionMs': 42000,
       'updatedAt': '2026-08-01T10:02:00Z',
-      'artwork': redArtwork,
     });
     await tester.pumpAndSettle();
     expect(
@@ -2002,10 +2015,10 @@ void main() {
       find.byKey(const ValueKey('media-activity-buffering')),
       findsOneWidget,
     );
-    final peerFinder = find.byKey(const ValueKey('trusted-orbit-peer-peer-a'));
     final redAccent =
         tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
     expect(redAccent, isNotNull);
+    expect(redAccent, initialRedAccent);
     expect(
       HSLColor.fromColor(redAccent!).hue,
       anyOf(lessThan(20), greaterThan(340)),
@@ -2017,6 +2030,23 @@ void main() {
       ),
       findsOneWidget,
     );
+
+    await tester.tap(peerFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-media')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(ValueKey('device-focus-media-artwork-$redIdentity')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-media-artwork-placeholder')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-panel-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-close')));
+    await tester.pumpAndSettle();
 
     await client.emitMediaUpdated({
       'sourceDeviceId': 'peer-a',
@@ -2039,6 +2069,23 @@ void main() {
         tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
     expect(blueAccent, isNotNull);
     expect(HSLColor.fromColor(blueAccent!).hue, inInclusiveRange(200, 250));
+
+    await tester.tap(peerFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-media')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(ValueKey('device-focus-media-artwork-$blueIdentity')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(ValueKey('device-focus-media-artwork-$redIdentity')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-panel-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-close')));
+    await tester.pumpAndSettle();
 
     await client.emitMediaRemoved({
       'sourceDeviceId': 'peer-a',
@@ -2066,6 +2113,181 @@ void main() {
         find.byKey(const ValueKey('device-focus-node-media')), findsOneWidget);
     expect(find.text('Nothing playing'), findsOneWidget);
   });
+
+  testWidgets(
+    'retains loaded artwork across a live artwork-less playback update',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final artwork = await tester.runAsync(
+        () => _solidArtwork(const Color(0xFFD62828)),
+      );
+      final artworkIdentity = artwork!['sha256']?.toString() ?? '';
+      final client = FakeJsonRpcRiftClient()
+        ..trustedPeers = [
+          {
+            'deviceId': 'race-peer',
+            'displayName': 'Race Peer',
+            'platform': 'android',
+            'trustState': 'trusted',
+            'presence': 'online',
+            'capabilities': ['media.playback'],
+          },
+        ];
+      final loadCompleter = Completer<dynamic>();
+      client.listMediaPlaybackCompleter = loadCompleter;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await client.emitMediaUpdated({
+        'sourceDeviceId': 'race-peer',
+        'playbackId': 'race-session',
+        'appName': 'Player',
+        'title': 'Live state',
+        'playbackState': 'paused',
+        'positionMs': 42000,
+        'updatedAt': '2026-08-01T10:01:00Z',
+      });
+      await tester.pump();
+
+      loadCompleter.complete({
+        'playbacks': [
+          {
+            'sourceDeviceId': 'race-peer',
+            'playbackId': 'race-session',
+            'appName': 'Player',
+            'title': 'Loaded state',
+            'playbackState': 'playing',
+            'updatedAt': '2026-08-01T10:00:00Z',
+            'artwork': artwork,
+          },
+        ],
+      });
+      await tester.pumpAndSettle();
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('orbit-peer-media-accented-race-peer'))
+            .evaluate()
+            .isNotEmpty,
+      );
+
+      expect(
+        find.byKey(const ValueKey('orbit-peer-media-accented-race-peer')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('trusted-orbit-peer-race-peer')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('device-focus-node-media')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('device-focus-media-artwork-$artworkIdentity')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'retains live artwork when load reconciliation returns without artwork',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final artwork = await tester.runAsync(
+        () => _solidArtwork(const Color(0xFF2457D6)),
+      );
+      final artworkIdentity = artwork!['sha256']?.toString() ?? '';
+      final client = FakeJsonRpcRiftClient()
+        ..trustedPeers = [
+          {
+            'deviceId': 'inverse-peer',
+            'displayName': 'Inverse Peer',
+            'platform': 'android',
+            'trustState': 'trusted',
+            'presence': 'online',
+            'capabilities': ['media.playback'],
+          },
+        ];
+      final loadCompleter = Completer<dynamic>();
+      client.listMediaPlaybackCompleter = loadCompleter;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await client.emitMediaUpdated({
+        'sourceDeviceId': 'inverse-peer',
+        'playbackId': 'inverse-session',
+        'appName': 'Player',
+        'title': 'Live artwork',
+        'playbackState': 'playing',
+        'updatedAt': '2026-08-01T10:01:00Z',
+        'artwork': artwork,
+      });
+      await tester.pump();
+
+      loadCompleter.complete({
+        'playbacks': [
+          {
+            'sourceDeviceId': 'inverse-peer',
+            'playbackId': 'inverse-session',
+            'appName': 'Player',
+            'title': 'Loaded without artwork',
+            'playbackState': 'paused',
+            'updatedAt': '2026-08-01T10:00:00Z',
+          },
+        ],
+      });
+      await tester.pumpAndSettle();
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('orbit-peer-media-accented-inverse-peer'))
+            .evaluate()
+            .isNotEmpty,
+      );
+
+      expect(
+        find.byKey(const ValueKey('orbit-peer-media-accented-inverse-peer')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('trusted-orbit-peer-inverse-peer')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('device-focus-node-media')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('device-focus-media-artwork-$artworkIdentity')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('desktop hub focuses trusted peers in place',
       (WidgetTester tester) async {

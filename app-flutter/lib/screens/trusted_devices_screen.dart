@@ -84,8 +84,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   final Map<String, Color> _pendingAccentFallbackByPlaybackKey =
       <String, Color>{};
   final ArtworkAccentCache _artworkAccentCache = ArtworkAccentCache();
-  final List<({bool removed, Map<String, dynamic> playback})>
-      _playbackMutationsDuringLoad = [];
+  final List<
+      ({
+        bool removed,
+        bool hasArtworkUpdate,
+        Object? artworkPayload,
+        Map<String, dynamic> playback,
+      })> _playbackMutationsDuringLoad = [];
   bool _isLoadingPlayback = false;
   String? _error;
   bool _isLoadingData = false;
@@ -387,17 +392,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         final playback = Map<String, dynamic>.from(item);
         final key = mediaPlaybackKey(playback);
         if (key == null) continue;
-        artworkPayloads[key] = playback.remove('artwork');
+        if (playback.containsKey('artwork')) {
+          artworkPayloads[key] = playback.remove('artwork');
+        }
         loaded[key] = playback;
       }
       for (final mutation in _playbackMutationsDuringLoad) {
         final key = mediaPlaybackKey(mutation.playback);
         if (key == null) continue;
-        artworkPayloads.remove(key);
         if (mutation.removed) {
           loaded.remove(key);
+          artworkPayloads.remove(key);
         } else {
           loaded[key] = mutation.playback;
+          if (mutation.hasArtworkUpdate) {
+            artworkPayloads[key] = mutation.artworkPayload;
+          }
         }
       }
       _playbackArtworkCache.retainOnly(loaded.keys);
@@ -430,9 +440,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final playback = Map<String, dynamic>.from(event);
     final key = mediaPlaybackKey(playback);
     if (key == null || !mounted) return;
-    final artworkPayload = playback.remove('artwork');
+    final hasArtworkUpdate = playback.containsKey('artwork');
+    final artworkPayload = hasArtworkUpdate ? playback.remove('artwork') : null;
     if (_isLoadingPlayback) {
-      _playbackMutationsDuringLoad.add((removed: false, playback: playback));
+      _playbackMutationsDuringLoad.add((
+        removed: false,
+        hasArtworkUpdate: hasArtworkUpdate,
+        artworkPayload: artworkPayload,
+        playback: playback,
+      ));
     }
     final sourceDeviceId = playback['sourceDeviceId']?.toString() ?? '';
     final previousDeviceAccent =
@@ -440,11 +456,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     setState(() {
       _playbacksByKey[key] = playback;
     });
-    _startPlaybackArtworkResolution(
-      key,
-      artworkPayload,
-      fallbackAccent: previousDeviceAccent,
-    );
+    if (hasArtworkUpdate) {
+      _startPlaybackArtworkResolution(
+        key,
+        artworkPayload,
+        fallbackAccent: previousDeviceAccent,
+      );
+    }
   }
 
   void _startPlaybackArtworkResolution(
@@ -502,7 +520,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final key = mediaPlaybackKey(playback);
     if (key == null || !mounted) return;
     if (_isLoadingPlayback) {
-      _playbackMutationsDuringLoad.add((removed: true, playback: playback));
+      _playbackMutationsDuringLoad.add((
+        removed: true,
+        hasArtworkUpdate: false,
+        artworkPayload: null,
+        playback: playback,
+      ));
     }
     _artworkGenerationByPlaybackKey.remove(key);
     _playbackArtworkCache.remove(key);
