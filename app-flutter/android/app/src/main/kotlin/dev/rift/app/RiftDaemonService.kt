@@ -41,6 +41,11 @@ class RiftDaemonService : Service() {
         internal const val preferencesName = "rift_background_sync"
         internal const val backgroundEnabledKey = "enabled"
 
+        internal fun shouldResetForegroundSyncStatus(
+            hasEngine: Boolean,
+            runtimeShutdownStarted: Boolean,
+        ): Boolean = !hasEngine || runtimeShutdownStarted
+
         fun start(context: Context) {
             context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
                 .edit()
@@ -91,23 +96,29 @@ class RiftDaemonService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                val startingStatus = ForegroundSyncStatus(
-                    runtimeState = ForegroundSyncRuntimeState.STARTING,
-                    trustedPeerCount = 0,
-                    connectedPeerCount = 0,
-                    connectedPeerNames = emptyList(),
-                )
-                lastForegroundSyncStatus = startingStatus
-                ServiceCompat.startForeground(
-                    this,
-                    notificationId,
-                    buildForegroundNotification(startingStatus),
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-                    } else {
-                        0
-                    },
-                )
+                if (shouldResetForegroundSyncStatus(
+                        hasEngine = engine != null,
+                        runtimeShutdownStarted = runtimeShutdownStarted,
+                    )
+                ) {
+                    val startingStatus = ForegroundSyncStatus(
+                        runtimeState = ForegroundSyncRuntimeState.STARTING,
+                        trustedPeerCount = 0,
+                        connectedPeerCount = 0,
+                        connectedPeerNames = emptyList(),
+                    )
+                    lastForegroundSyncStatus = startingStatus
+                    ServiceCompat.startForeground(
+                        this,
+                        notificationId,
+                        buildForegroundNotification(startingStatus),
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                        } else {
+                            0
+                        },
+                    )
+                }
                 if (runtimeShutdownStarted) {
                     restartAfterShutdown = true
                     Log.i(

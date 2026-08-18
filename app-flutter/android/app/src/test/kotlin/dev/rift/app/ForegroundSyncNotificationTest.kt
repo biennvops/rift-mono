@@ -1,6 +1,7 @@
 package dev.rift.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,6 +26,28 @@ class ForegroundSyncNotificationTest {
                 connectedPeerNames = listOf("Fedora Workstation", "MacBook Pro"),
             ),
             status,
+        )
+    }
+
+    @Test
+    fun duplicateStartPreservesExistingForegroundStatus() {
+        assertFalse(
+            RiftDaemonService.shouldResetForegroundSyncStatus(
+                hasEngine = true,
+                runtimeShutdownStarted = false,
+            ),
+        )
+        assertTrue(
+            RiftDaemonService.shouldResetForegroundSyncStatus(
+                hasEngine = false,
+                runtimeShutdownStarted = false,
+            ),
+        )
+        assertTrue(
+            RiftDaemonService.shouldResetForegroundSyncStatus(
+                hasEngine = true,
+                runtimeShutdownStarted = true,
+            ),
         )
     }
 
