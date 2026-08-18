@@ -6,6 +6,7 @@ using Rift.Daemon.Core;
 using Rift.Daemon.Core.Cryptography;
 using Rift.Daemon.Core.Data;
 using Rift.Daemon.Core.Interfaces;
+using StreamJsonRpc;
 
 namespace Rift.Daemon.Tests.Core;
 
@@ -768,8 +769,27 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     public async Task HandleMessageAsync_MediaPlaybackArtwork_PreservesMetadata()
     {
         const string peerDeviceId = "rift-peer-media-artwork";
+        var mediaIpcNotificationService = new RecordingIpcNotificationService();
+        var mediaPlaybackService = new MediaPlaybackSyncService(
+            _clipboardTransport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            mediaIpcNotificationService,
+            logger: NullLogger<MediaPlaybackSyncService>.Instance);
+        var artworkRouter = new ProtocolMessageRouter(
+            _pairingCoordinator,
+            _presenceService,
+            _clipboardService,
+            _fileTransferService,
+            mediaPlaybackService,
+            _notificationSyncService,
+            _identityManager,
+            _deviceStatusService,
+            _securityEventLog);
 
-        await _router.HandleMessageAsync(
+        await artworkRouter.HandleMessageAsync(
             CreateSession(peerDeviceId, ["media.playback"]),
             CreateEnvelope(peerDeviceId, "media.playbackPosted", new
             {
@@ -798,7 +818,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             }),
             CancellationToken.None);
 
-        var playback = await _mediaPlaybackSyncService.GetMediaPlaybackAsync(
+        var playback = await mediaPlaybackService.GetMediaPlaybackAsync(
             peerDeviceId,
             "playback-1",
             CancellationToken.None);
@@ -810,6 +830,17 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         Assert.Equal(
             "6105d6cc76af400325e94d588ce511be5bfdbb73b437dc51eca43917d7a43e3d",
             playback.Artwork["sha256"]);
+
+        var notification = Assert.Single(
+            mediaIpcNotificationService.Events,
+            evt => evt.Method == "rift.onMediaPlaybackPosted");
+        var notificationPlayback = Assert.IsType<MediaPlaybackRecord>(notification.Payload);
+        Assert.Equal("image/jpeg", notificationPlayback.Artwork!["mediaType"]);
+        Assert.Equal("aW1hZ2U=", notificationPlayback.Artwork["dataBase64"]);
+        Assert.Equal(5, notificationPlayback.Artwork["byteSize"]);
+        Assert.Equal(
+            "6105d6cc76af400325e94d588ce511be5bfdbb73b437dc51eca43917d7a43e3d",
+            notificationPlayback.Artwork["sha256"]);
     }
 
     [Fact]
@@ -1100,6 +1131,32 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         public void StartDiscovery() { }
 
         public void StopDiscovery() { }
+    }
+
+    private sealed class RecordingIpcNotificationService : IIpcNotificationService
+    {
+        public bool HasClients => true;
+        public List<(string Method, object Payload)> Events { get; } = [];
+
+        public IDisposable RegisterClient(JsonRpc jsonRpc) => NullDisposable.Instance;
+
+        public Task NotifyAsync(
+            string method,
+            object parameters,
+            CancellationToken cancellationToken = default)
+        {
+            Events.Add((method, parameters));
+            return Task.CompletedTask;
+        }
+
+        private sealed class NullDisposable : IDisposable
+        {
+            public static readonly NullDisposable Instance = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 
     private sealed class FakeTransport : ITransport
