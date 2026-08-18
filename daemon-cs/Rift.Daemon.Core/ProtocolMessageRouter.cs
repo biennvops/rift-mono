@@ -676,6 +676,7 @@ public sealed class ProtocolMessageRouter(
             Artist = mediaPayload.TryGetProperty("artist", out var artistElement) ? artistElement.GetString() : null,
             Album = mediaPayload.TryGetProperty("album", out var albumElement) ? albumElement.GetString() : null,
             Artwork = ParseArtwork(mediaPayload),
+            ArtworkPending = mediaPayload.TryGetProperty("artworkPending", out var artworkPendingElement) && artworkPendingElement.GetBoolean(),
             PlaybackState = mediaPayload.GetProperty("playbackState").GetString() ?? string.Empty,
             PositionMs = mediaPayload.GetProperty("positionMs").GetInt64(),
             DurationMs = mediaPayload.TryGetProperty("durationMs", out var durationElement) ? durationElement.GetInt64() : null,

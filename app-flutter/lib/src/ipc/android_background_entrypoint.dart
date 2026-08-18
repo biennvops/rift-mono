@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
@@ -184,6 +185,20 @@ Future<void> runAndroidBackgroundMain() async {
     try {
       final payload = Map<String, Object?>.from(event.payload)
         ..remove('eventType');
+      if (kDebugMode &&
+          event.kind == AndroidNativeEventKind.mediaPlaybackState) {
+        final artwork = event.payload['artwork'];
+        final artworkKeys = artwork is Map
+            ? artwork.keys.map((key) => key.toString()).toList(growable: false)
+            : const <String>[];
+        debugPrint(
+          '[MediaArtwork] dispatch '
+          'playback=${event.payload['playbackId']} '
+          'hasArtwork=${artwork is Map} '
+          'artworkKeys=$artworkKeys '
+          'pending=${event.payload['artworkPending'] == true}',
+        );
+      }
       switch (event.kind) {
         case AndroidNativeEventKind.notificationState:
           await client.notifyLocalNotificationEvent(

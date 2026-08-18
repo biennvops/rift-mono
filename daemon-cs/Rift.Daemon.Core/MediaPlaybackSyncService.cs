@@ -508,6 +508,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
                     Artist = existing.Artist,
                     Album = existing.Album,
                     Artwork = existing.Artwork is null ? null : new Dictionary<string, object?>(existing.Artwork),
+                    ArtworkPending = existing.ArtworkPending,
                     PlaybackState = existing.PlaybackState,
                     PositionMs = existing.PositionMs,
                     DurationMs = existing.DurationMs,
@@ -936,6 +937,11 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
 
     private static void ValidateRecord(MediaPlaybackRecord playback)
     {
+        if (playback.ArtworkPending && playback.Artwork is not null)
+        {
+            throw new InvalidOperationException("Media playback artworkPending cannot be true when artwork is present.");
+        }
+
         if (string.IsNullOrWhiteSpace(playback.PlaybackId) ||
             string.IsNullOrWhiteSpace(playback.SourceDeviceId) ||
             string.IsNullOrWhiteSpace(playback.AppId) ||
@@ -989,6 +995,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             Artist = playback.Artist,
             Album = playback.Album,
             Artwork = NormalizeArtworkForTransport(playback.Artwork),
+            ArtworkPending = playback.ArtworkPending,
             PlaybackState = playback.PlaybackState,
             PositionMs = playback.PositionMs,
             DurationMs = playback.DurationMs,
@@ -1014,6 +1021,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         artist = playback.Artist,
         album = playback.Album,
         artwork = playback.Artwork,
+        artworkPending = playback.ArtworkPending,
         playbackState = playback.PlaybackState,
         positionMs = playback.PositionMs,
         durationMs = playback.DurationMs,
@@ -1429,6 +1437,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             Artist = playback.Artist,
             Album = playback.Album,
             Artwork = NormalizeArtworkValues(playback.Artwork),
+            ArtworkPending = playback.ArtworkPending,
             PlaybackState = playback.PlaybackState,
             PositionMs = playback.PositionMs,
             DurationMs = playback.DurationMs,

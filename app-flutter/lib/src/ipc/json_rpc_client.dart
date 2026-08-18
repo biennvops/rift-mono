@@ -320,6 +320,7 @@ class JsonRpcRiftClient {
     'Artist': 'artist',
     'Album': 'album',
     'Artwork': 'artwork',
+    'ArtworkPending': 'artworkPending',
     'PlaybackState': 'playbackState',
     'PositionMs': 'positionMs',
     'DurationMs': 'durationMs',

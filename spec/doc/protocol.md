@@ -409,6 +409,7 @@ The v1 playback record fields are:
 | `artist`          | No       | string              | Current media artist                                                |
 | `album`           | No       | string              | Current media album                                                 |
 | `artwork`         | No       | object              | Optional metadata for artwork payloads                              |
+| `artworkPending`  | No       | boolean             | True only while known current artwork is awaiting materialization    |
 | `playbackState`   | Yes      | string              | One of `playing`, `paused`, `stopped`, or `buffering`               |
 | `positionMs`      | Yes      | integer             | Non-negative current playback position                              |
 | `durationMs`      | No       | integer             | Non-negative media duration when known                              |
@@ -430,6 +431,15 @@ re-decoding unchanged artwork. Implementations MAY additionally include the sour
 URI. Originators MUST omit artwork that is unavailable, unsupported, malformed, or
 larger than 20 MiB before Base64 encoding. Media playback sync v1 supports PNG,
 JPEG, GIF, and WebP artwork.
+
+`artworkPending` MAY be true when the originator knows that the current media has
+artwork but is still materializing its transport payload. It MUST NOT be true when
+`artwork` is present, and MUST be omitted or false once artwork is available or
+definitely unavailable. Receivers MUST replace the playback record's metadata on
+every update; while `artworkPending` is true, they MAY retain only the prior artwork
+presentation until a subsequent full record supplies or definitively omits artwork.
+An omitted `artwork` without `artworkPending` means the current record has no
+available artwork and MUST clear prior artwork presentation state.
 
 `media.playbackPosted` payload fields: the full playback record above.
 

@@ -10,6 +10,26 @@ import org.junit.Test
 
 class AndroidMediaArtworkPipelineTest {
     @Test
+    fun encodedArtworkUsesCanonicalProtocolFields() {
+        val expectedBase64 = "iVBORw0KGgo="
+        val expectedSha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        val artwork = EncodedMediaArtwork(
+            mimeType = "image/png",
+            dataBase64 = expectedBase64,
+            byteSize = 8,
+            sha256 = expectedSha,
+        )
+
+        val payload = artwork.asMap()
+
+        assertEquals("image/png", payload["mediaType"])
+        assertFalse(payload.containsKey("mimeType"))
+        assertEquals(expectedBase64, payload["dataBase64"])
+        assertEquals(8, payload["byteSize"])
+        assertEquals(expectedSha, payload["sha256"])
+    }
+
+    @Test
     fun cachedArtworkAvoidsAnotherEncode() {
         val executor = QueuedExecutor()
         val dispatcher = QueuedDispatcher()
@@ -38,12 +58,19 @@ class AndroidMediaArtworkPipelineTest {
         val dispatcher = QueuedDispatcher()
         var encodeCount = 0
         val received = mutableListOf<String>()
+        var failureCount = 0
         val pipeline = pipeline(executor, dispatcher) { source ->
             encodeCount += 1
             if (encodeCount == 1) null else "encoded:$source"
         }
 
-        pipeline.request("art", "source", "player", received::add)
+        pipeline.request(
+            "art",
+            "source",
+            "player",
+            received::add,
+            onFailure = { failureCount += 1 },
+        )
         executor.runAll()
         dispatcher.runAll()
         val failedLookup = pipeline.lookup("art")
@@ -53,6 +80,7 @@ class AndroidMediaArtworkPipelineTest {
 
         assertFalse(failedLookup.isCached)
         assertEquals(2, encodeCount)
+        assertEquals(1, failureCount)
         assertEquals(listOf("encoded:source"), received)
         assertEquals(1, pipeline.cacheSize())
     }
@@ -206,6 +234,35 @@ class AndroidMediaArtworkPipelineTest {
             "updated",
             tracker.artworkReady(newest.playbackId, newestDecision.generation, artworkB)?.eventType,
         )
+        assertEquals(newest, tracker.current(newest.playbackId)?.state)
+    }
+
+    @Test
+    fun failedArtworkClearsPreviouslyPublishedArtwork() {
+        val tracker = MediaSnapshotTracker(MutableMediaObserverStats())
+        val artworkA = artworkKey(1)
+        val artworkB = artworkKey(2)
+        val initial = snapshot(artworkA)
+        val initialDecision = tracker.evaluate(initial, false, artworkAvailable = false)
+        assertTrue(initialDecision.artworkPending)
+        assertEquals(
+            "updated",
+            tracker.artworkReady(initial.playbackId, initialDecision.generation, artworkA)?.eventType,
+        )
+
+        val newest = initial.copy(title = "Track B", artworkKey = artworkB)
+        val pending = tracker.evaluate(newest, false, artworkAvailable = false)
+        assertTrue(pending.artworkPending)
+        val unavailable = tracker.artworkUnavailable(
+            newest.playbackId,
+            pending.generation,
+            artworkB,
+        )
+
+        assertEquals("updated", unavailable?.eventType)
+        assertFalse(unavailable?.includeArtwork == true)
+        assertFalse(unavailable?.artworkPending == true)
+        assertNull(tracker.artworkUnavailable(newest.playbackId, pending.generation, artworkB))
         assertEquals(newest, tracker.current(newest.playbackId)?.state)
     }
 

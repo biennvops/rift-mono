@@ -166,6 +166,7 @@ internal data class MediaSnapshotDecision(
     val generation: Long,
     val includeArtwork: Boolean,
     val requestArtwork: Boolean,
+    val artworkPending: Boolean = false,
 )
 
 internal data class CurrentMediaSnapshot(
@@ -179,6 +180,7 @@ internal class MediaSnapshotTracker(
     private val currentById = HashMap<String, CurrentMediaSnapshot>()
     private val lastPublishedById = HashMap<String, MediaSnapshotState>()
     private val publishedArtworkById = HashMap<String, ArtworkKey>()
+    private val publishedArtworkPendingById = HashMap<String, Boolean>()
     private val postedIds = HashSet<String>()
     private var nextGeneration = 0L
 
@@ -198,6 +200,7 @@ internal class MediaSnapshotTracker(
 
         val artworkKey = candidate.artworkKey
         val includeArtwork = artworkKey != null && artworkAvailable
+        val artworkPending = artworkKey != null && !artworkAvailable
         val isFirstPublication = candidate.playbackId !in postedIds
         val semanticChanged = lastPublishedById[candidate.playbackId] != candidate
         val encodedArtworkChanged = includeArtwork &&
@@ -213,6 +216,7 @@ internal class MediaSnapshotTracker(
                 requestArtwork = artworkKey != null &&
                     !artworkAvailable &&
                     publishedArtworkById[candidate.playbackId] != artworkKey,
+                artworkPending = artworkPending,
             )
         }
 
@@ -223,12 +227,14 @@ internal class MediaSnapshotTracker(
         } else {
             publishedArtworkById.remove(candidate.playbackId)
         }
+        publishedArtworkPendingById[candidate.playbackId] = artworkPending
         stats.snapshotsEmitted.incrementAndGet()
         return MediaSnapshotDecision(
             eventType = if (forceReplay || isFirstPublication) "posted" else "updated",
             generation = generation,
             includeArtwork = includeArtwork,
             requestArtwork = artworkKey != null && !artworkAvailable,
+            artworkPending = artworkPending,
         )
     }
 
@@ -252,11 +258,45 @@ internal class MediaSnapshotTracker(
 
         lastPublishedById[playbackId] = current.state
         publishedArtworkById[playbackId] = artworkKey
+        publishedArtworkPendingById[playbackId] = false
         stats.snapshotsEmitted.incrementAndGet()
         return MediaSnapshotDecision(
             eventType = "updated",
             generation = generation,
             includeArtwork = true,
+            requestArtwork = false,
+        )
+    }
+
+    fun artworkUnavailable(
+        playbackId: String,
+        generation: Long,
+        artworkKey: ArtworkKey,
+    ): MediaSnapshotDecision? {
+        val current = currentById[playbackId]
+        if (
+            current == null ||
+            current.generation != generation ||
+            current.state.artworkKey != artworkKey ||
+            playbackId !in postedIds
+        ) {
+            return null
+        }
+        if (
+            publishedArtworkById[playbackId] == artworkKey ||
+            publishedArtworkPendingById[playbackId] != true
+        ) {
+            return null
+        }
+
+        lastPublishedById[playbackId] = current.state
+        publishedArtworkById.remove(playbackId)
+        publishedArtworkPendingById[playbackId] = false
+        stats.snapshotsEmitted.incrementAndGet()
+        return MediaSnapshotDecision(
+            eventType = "updated",
+            generation = generation,
+            includeArtwork = false,
             requestArtwork = false,
         )
     }
@@ -269,6 +309,7 @@ internal class MediaSnapshotTracker(
         currentById.remove(playbackId)
         lastPublishedById.remove(playbackId)
         publishedArtworkById.remove(playbackId)
+        publishedArtworkPendingById.remove(playbackId)
         return postedIds.remove(playbackId)
     }
 
@@ -276,6 +317,7 @@ internal class MediaSnapshotTracker(
         currentById.clear()
         lastPublishedById.clear()
         publishedArtworkById.clear()
+        publishedArtworkPendingById.clear()
         postedIds.clear()
     }
 }

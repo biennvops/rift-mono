@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -84,8 +85,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   final Map<String, Color> _pendingAccentFallbackByPlaybackKey =
       <String, Color>{};
   final ArtworkAccentCache _artworkAccentCache = ArtworkAccentCache();
-  final List<({bool removed, Map<String, dynamic> playback})>
-      _playbackMutationsDuringLoad = [];
+  final List<
+      ({
+        bool removed,
+        bool hasArtworkUpdate,
+        bool artworkPending,
+        Object? artworkPayload,
+        Map<String, dynamic> playback,
+      })> _playbackMutationsDuringLoad = [];
   bool _isLoadingPlayback = false;
   String? _error;
   bool _isLoadingData = false;
@@ -387,17 +394,26 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         final playback = Map<String, dynamic>.from(item);
         final key = mediaPlaybackKey(playback);
         if (key == null) continue;
-        artworkPayloads[key] = playback.remove('artwork');
+        if (playback.containsKey('artwork')) {
+          artworkPayloads[key] = playback.remove('artwork');
+        } else if (playback['artworkPending'] != true) {
+          artworkPayloads[key] = null;
+        }
         loaded[key] = playback;
       }
       for (final mutation in _playbackMutationsDuringLoad) {
         final key = mediaPlaybackKey(mutation.playback);
         if (key == null) continue;
-        artworkPayloads.remove(key);
         if (mutation.removed) {
           loaded.remove(key);
+          artworkPayloads.remove(key);
         } else {
           loaded[key] = mutation.playback;
+          if (mutation.hasArtworkUpdate) {
+            artworkPayloads[key] = mutation.artworkPayload;
+          } else if (!mutation.artworkPending) {
+            artworkPayloads.remove(key);
+          }
         }
       }
       _playbackArtworkCache.retainOnly(loaded.keys);
@@ -430,9 +446,18 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final playback = Map<String, dynamic>.from(event);
     final key = mediaPlaybackKey(playback);
     if (key == null || !mounted) return;
-    final artworkPayload = playback.remove('artwork');
+    final hasArtworkUpdate = playback.containsKey('artwork');
+    final artworkPending =
+        playback['artworkPending'] == true && !hasArtworkUpdate;
+    final artworkPayload = hasArtworkUpdate ? playback.remove('artwork') : null;
     if (_isLoadingPlayback) {
-      _playbackMutationsDuringLoad.add((removed: false, playback: playback));
+      _playbackMutationsDuringLoad.add((
+        removed: false,
+        hasArtworkUpdate: hasArtworkUpdate,
+        artworkPending: artworkPending,
+        artworkPayload: artworkPayload,
+        playback: playback,
+      ));
     }
     final sourceDeviceId = playback['sourceDeviceId']?.toString() ?? '';
     final previousDeviceAccent =
@@ -440,11 +465,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     setState(() {
       _playbacksByKey[key] = playback;
     });
-    _startPlaybackArtworkResolution(
-      key,
-      artworkPayload,
-      fallbackAccent: previousDeviceAccent,
-    );
+    if (hasArtworkUpdate || !artworkPending) {
+      _startPlaybackArtworkResolution(
+        key,
+        artworkPayload,
+        fallbackAccent: previousDeviceAccent,
+      );
+    }
   }
 
   void _startPlaybackArtworkResolution(
@@ -470,6 +497,24 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     int generation,
     Color? fallbackAccent,
   ) async {
+    if (kDebugMode) {
+      final rawArtwork = artworkPayload is Map ? artworkPayload : null;
+      final artworkKeys = rawArtwork == null
+          ? const <String>[]
+          : rawArtwork.keys
+              .map((key) => key.toString())
+              .toList(growable: false);
+      final playbackId =
+          _playbacksByKey[playbackKey]?['playbackId']?.toString() ??
+              playbackKey;
+      debugPrint(
+        '[MediaArtwork] received '
+        'playback=$playbackId '
+        'hasArtwork=${rawArtwork != null} '
+        'artworkKeys=$artworkKeys '
+        'pending=${_playbacksByKey[playbackKey]?['artworkPending'] == true}',
+      );
+    }
     final artwork =
         await _playbackArtworkCache.resolve(playbackKey, artworkPayload);
     if (!mounted ||
@@ -502,7 +547,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final key = mediaPlaybackKey(playback);
     if (key == null || !mounted) return;
     if (_isLoadingPlayback) {
-      _playbackMutationsDuringLoad.add((removed: true, playback: playback));
+      _playbackMutationsDuringLoad.add((
+        removed: true,
+        hasArtworkUpdate: false,
+        artworkPending: false,
+        artworkPayload: null,
+        playback: playback,
+      ));
     }
     _artworkGenerationByPlaybackKey.remove(key);
     _playbackArtworkCache.remove(key);

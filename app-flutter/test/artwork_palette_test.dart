@@ -95,6 +95,22 @@ void main() {
     );
   });
 
+  test('resolves an Android-origin canonical artwork payload', () async {
+    final bytes = await imageBytes((canvas) {
+      canvas.drawColor(const Color(0xFFD62828), BlendMode.src);
+    });
+    final cache = PlaybackArtworkCache();
+
+    final artwork = await cache.resolve(
+      'android-peer:android-session',
+      artworkPayload(bytes),
+    );
+
+    expect(artwork, isNotNull);
+    expect(artwork!.mediaType, 'image/png');
+    expect(artwork.bytes, orderedEquals(bytes));
+  });
+
   test('reuses decoded artwork without retaining its Base64 source', () async {
     final bytes = await imageBytes((canvas) {
       canvas.drawColor(const Color(0xFFD62828), BlendMode.src);

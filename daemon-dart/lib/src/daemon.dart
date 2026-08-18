@@ -1487,6 +1487,7 @@ class RiftDaemon {
       artwork: params['artwork'] is Map
           ? Map<String, dynamic>.from(params['artwork'] as Map)
           : null,
+      artworkPending: _optionalMediaPlaybackBool(params, 'artworkPending'),
       playbackState: RpcUtils.requireStringParam(params, 'playbackState'),
       positionMs: RpcUtils.requireIntParam(params, 'positionMs'),
       durationMs: params['durationMs'] as int?,
@@ -2156,6 +2157,15 @@ class RiftDaemon {
     return value;
   }
 
+  bool _optionalMediaPlaybackBool(Map<String, dynamic> payload, String key) {
+    final value = payload[key];
+    if (value == null) return false;
+    if (value is! bool) {
+      throw ArgumentError.value(value, key, 'must be a boolean');
+    }
+    return value;
+  }
+
   bool _requireMediaPlaybackBool(Map<String, dynamic> payload, String key) {
     final value = payload[key];
     if (value is! bool) {
@@ -2171,6 +2181,11 @@ class RiftDaemon {
         playback.playbackState,
         'playbackState',
         'must be playing, paused, stopped, or buffering',
+      );
+    }
+    if (playback.artworkPending && playback.artwork != null) {
+      throw ArgumentError(
+        'artworkPending cannot be true when artwork is present',
       );
     }
     if (playback.positionMs < 0 ||
@@ -3288,6 +3303,7 @@ class RiftDaemon {
       artwork: payload['artwork'] is Map
           ? Map<String, dynamic>.from(payload['artwork'] as Map)
           : null,
+      artworkPending: _optionalMediaPlaybackBool(payload, 'artworkPending'),
       playbackState: RpcUtils.requireStringParam(payload, 'playbackState'),
       positionMs: RpcUtils.requireIntParam(payload, 'positionMs'),
       durationMs: payload['durationMs'] as int?,
