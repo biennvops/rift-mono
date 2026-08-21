@@ -7,6 +7,9 @@ import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/media_playback/playback_presentation.dart';
 import '../widgets/device_focus/device_focus_view.dart';
+import '../widgets/device_hub/device_platform_presentation.dart';
+import '../widgets/device_hub/device_summary_status.dart';
+import '../widgets/device_hub/orbit_peer_presentation.dart';
 import '../widgets/rift_snackbar.dart';
 
 const _kSuccessColor = Color(0xFF047857);
@@ -356,22 +359,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
   }
 
-  IconData _platformIcon(String? platform) {
-    switch (platform?.toLowerCase()) {
-      case 'android':
-      case 'ios':
-        return Icons.smartphone;
-      case 'windows':
-        return Icons.desktop_windows;
-      case 'macos':
-        return Icons.laptop_mac;
-      case 'linux':
-        return Icons.computer;
-      default:
-        return Icons.devices;
-    }
-  }
-
   void _copyToClipboard(String text, String message) {
     Clipboard.setData(ClipboardData(text: text));
     RiftSnackbar.show(
@@ -559,8 +546,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Future<void> _forgetPeer() async {
     final deviceId = peer['deviceId']?.toString();
-    final displayName =
-        peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
+    final displayName = resolveDeviceDisplayName(peer);
     final fingerprint = peer['fingerprint']?.toString() ?? 'Unknown';
     if (deviceId == null) return;
     final client = context.read<JsonRpcRiftClient>();
@@ -601,18 +587,33 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         final isEmbedded = widget.onClose != null;
         final isMobile = isEmbedded || constraints.maxWidth < 768;
 
-        final deviceId = peer['deviceId']?.toString() ?? 'Unknown ID';
-        final displayName = peer['displayName']?.toString() ?? deviceId;
-        final fingerprint = _resolveFingerprint(deviceId);
-        final protocolVersion = peer['protocolVersion']?.toString() ?? 'v2.4.0';
-        final platform = peer['platform']?.toString() ?? 'Unknown';
-        final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
-        final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
-        final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
+        final rawDeviceId = peer['deviceId']?.toString().trim() ?? '';
         final deviceStatus = peer['deviceStatus'] is Map
             ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
             : null;
-        final isOnline = this.isOnline;
+        final presentation = widget.isSelf
+            ? buildLocalDevicePresentation(
+                device: peer,
+                deviceStatus: deviceStatus,
+                mediaPlayback: widget.mediaPlayback,
+              )
+            : buildTrustedDevicePresentation(
+                peer: peer,
+                deviceStatus: deviceStatus,
+                mediaPlayback: widget.mediaPlayback,
+                isOnline: isOnline,
+              );
+        final deviceId = rawDeviceId.isNotEmpty ? rawDeviceId : 'Unknown ID';
+        final displayName = presentation.displayName;
+        final fingerprint = _resolveFingerprint(deviceId);
+        final protocolVersion = peer['protocolVersion']?.toString() ?? 'v2.4.0';
+        final platform = presentation.platform;
+        final rawPlatform = peer['platform']?.toString().trim() ?? '';
+        final platformDiagnostic = devicePlatformLabel(platform) ??
+            (rawPlatform.isNotEmpty ? rawPlatform : 'Unknown');
+        final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
+        final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
+        final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
 
         if (_wasRemoved) {
           return Scaffold(
@@ -629,19 +630,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   .toList(growable: false) ??
               const <String>[];
           return DeviceFocusView(
-            deviceId: deviceId,
-            displayName: displayName,
+            presentation: presentation,
             fingerprint: _formatFingerprint(fingerprint),
             protocolVersion: protocolVersion,
-            platform: platform,
             osVersion: osVersion,
             pairedAt: pairedAt,
             lastSeenAt: lastSeenAt,
             capabilities: capabilities,
             deviceStatus: deviceStatus,
             mediaPlayback: widget.mediaPlayback,
-            isOnline: isOnline,
-            isSelf: widget.isSelf,
             onClose: widget.onClose!,
             onRevokeTrust: widget.isSelf ? null : _forgetPeer,
             onCopy: _copyToClipboard,
@@ -746,7 +743,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                       _formatFingerprint(fingerprint),
                       isCode: true),
                   _buildIdentityRow(theme, Icons.desktop_windows, 'Platform',
-                      platform.toUpperCase()),
+                      platformDiagnostic),
                   _buildIdentityRow(theme, Icons.info, 'OS Version', osVersion),
                   _buildIdentityRow(
                       theme, Icons.dns, 'Rift Client Version', protocolVersion,
@@ -957,7 +954,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                 border: Border.all(
                                     color: theme.colorScheme.outlineVariant),
                               ),
-                              child: Icon(_platformIcon(platform),
+                              child: Icon(devicePlatformIcon(platform),
                                   color: theme.colorScheme.primary, size: 28),
                             ),
                             const SizedBox(width: 16),
@@ -967,6 +964,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                 children: [
                                   Text(
                                     displayName,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontSize: isMobile ? 24 : 32,
                                       fontWeight: FontWeight.w600,
@@ -982,50 +981,13 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                     crossAxisAlignment:
                                         WrapCrossAlignment.center,
                                     children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: isOnline
-                                              ? _kSuccessBgColor
-                                              : theme
-                                                  .colorScheme.surfaceContainer,
-                                          borderRadius:
-                                              BorderRadius.circular(4),
+                                      DeviceSummaryStatus(
+                                        key: const ValueKey(
+                                          'device-detail-summary',
                                         ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Container(
-                                              width: 8,
-                                              height: 8,
-                                              margin: const EdgeInsets.only(
-                                                  right: 6),
-                                              decoration: BoxDecoration(
-                                                color: isOnline
-                                                    ? _kSuccessColor
-                                                    : theme.colorScheme.outline,
-                                                shape: BoxShape.circle,
-                                              ),
-                                            ),
-                                            Text(
-                                              widget.isSelf
-                                                  ? 'This Device'
-                                                  : (isOnline
-                                                      ? 'Online'
-                                                      : 'Offline'),
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w500,
-                                                height: 16 / 12,
-                                                color: isOnline
-                                                    ? _kSuccessColor
-                                                    : theme.colorScheme
-                                                        .onSurfaceVariant,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                        presentation: presentation,
+                                        accentColor: presentation.accentColor ??
+                                            theme.colorScheme.primary,
                                       ),
                                       Text(
                                         widget.isSelf

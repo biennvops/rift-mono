@@ -9,11 +9,13 @@ class DeviceSummaryStatus extends StatelessWidget {
     required this.presentation,
     required this.accentColor,
     this.mutedColor,
+    this.alignment = WrapAlignment.start,
   });
 
   final OrbitPeerPresentation presentation;
   final Color accentColor;
   final Color? mutedColor;
+  final WrapAlignment alignment;
 
   @override
   Widget build(BuildContext context) {
@@ -28,6 +30,7 @@ class DeviceSummaryStatus extends StatelessWidget {
     final mediaLabel = presentation.mediaStateLabel;
 
     return Wrap(
+      alignment: alignment,
       spacing: 10,
       runSpacing: 3,
       crossAxisAlignment: WrapCrossAlignment.center,

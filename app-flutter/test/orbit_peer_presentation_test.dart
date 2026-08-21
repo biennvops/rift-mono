@@ -80,6 +80,27 @@ void main() {
         'Unknown device',
       );
     });
+
+    test('builds consistent accessible summaries without duplicate roles', () {
+      final trusted = buildTrustedDevicePresentation(
+        peer: peer(),
+        deviceStatus: {
+          'batteryPercent': 82,
+          'chargingState': 'charging',
+        },
+        mediaPlayback: media(),
+      );
+      final nearby = buildNearbyDevicePresentation(peer());
+
+      expect(
+        trusted.semanticDescription(role: 'trusted device'),
+        'Pixel 9, Android, trusted device, online, battery 82 percent, charging, playing Example Track by Example Artist',
+      );
+      expect(
+        nearby.semanticDescription(role: 'nearby device'),
+        'Pixel 9, Android, nearby device, ready to pair',
+      );
+    });
   });
 
   group('live power presentation', () {

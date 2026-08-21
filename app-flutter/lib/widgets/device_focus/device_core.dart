@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../device_hub/device_playback_status_glyph.dart';
+import '../device_hub/orbit_peer_presentation.dart';
 import '../media_playback_activity_indicator.dart';
 
 class DeviceCore extends StatelessWidget {
@@ -15,9 +17,9 @@ class DeviceCore extends StatelessWidget {
     required this.online,
     required this.wake,
     this.statusLabel,
+    this.semanticLabel,
     this.accentColor,
-    this.isMediaPlaying = false,
-    this.isMediaBuffering = false,
+    this.mediaActivity = OrbitPeerActivity.none,
   });
 
   final double size;
@@ -28,16 +30,16 @@ class DeviceCore extends StatelessWidget {
   final Animation<double> online;
   final Animation<double> wake;
   final String? statusLabel;
+  final String? semanticLabel;
   final Color? accentColor;
-  final bool isMediaPlaying;
-  final bool isMediaBuffering;
+  final OrbitPeerActivity mediaActivity;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final resolvedStatus = statusLabel ?? (isOnline ? 'Online' : 'Offline');
     return Semantics(
-      label: '$displayName, $resolvedStatus',
+      label: semanticLabel ?? '$displayName, $resolvedStatus',
       child: AnimatedBuilder(
         animation: Listenable.merge([entrance, online, wake]),
         builder: (context, child) {
@@ -162,6 +164,18 @@ class DeviceCore extends StatelessWidget {
                                         fontWeight: FontWeight.w700,
                                       ),
                                 ),
+                                if (mediaActivity !=
+                                    OrbitPeerActivity.none) ...[
+                                  SizedBox(width: size < 155 ? 4 : 6),
+                                  DevicePlaybackStatusGlyph(
+                                    key: ValueKey(
+                                      'device-focus-core-media-${mediaActivity.name}',
+                                    ),
+                                    activity: mediaActivity,
+                                    color: accent,
+                                    size: size < 155 ? 11 : 13,
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -169,12 +183,13 @@ class DeviceCore extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (isMediaPlaying || isMediaBuffering)
+                  if (mediaActivity == OrbitPeerActivity.mediaPlaying ||
+                      mediaActivity == OrbitPeerActivity.mediaBuffering)
                     IgnorePointer(
                       child: MediaPlaybackActivityIndicator(
                         size: size,
                         color: accent,
-                        kind: isMediaPlaying
+                        kind: mediaActivity == OrbitPeerActivity.mediaPlaying
                             ? MediaPlaybackActivityKind.playing
                             : MediaPlaybackActivityKind.buffering,
                       ),

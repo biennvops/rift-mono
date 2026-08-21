@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 
 import '../../src/media_playback/playback_presentation.dart';
 import '../animated_accent.dart';
+import '../device_hub/device_platform_presentation.dart';
+import '../device_hub/orbit_peer_presentation.dart';
 import 'device_core.dart';
 import 'device_focus_background.dart';
 import 'device_focus_connector_painter.dart';
@@ -18,19 +20,15 @@ typedef DeviceFocusCopyCallback = void Function(String text, String message);
 class DeviceFocusView extends StatefulWidget {
   const DeviceFocusView({
     super.key,
-    required this.deviceId,
-    required this.displayName,
+    required this.presentation,
     required this.fingerprint,
     required this.protocolVersion,
-    required this.platform,
     required this.osVersion,
     required this.pairedAt,
     required this.lastSeenAt,
     required this.capabilities,
-    required this.isOnline,
     required this.onClose,
     required this.onCopy,
-    this.isSelf = false,
     this.onRevokeTrust,
     this.onOpenClipboardActivity,
     this.onSendFile,
@@ -39,25 +37,27 @@ class DeviceFocusView extends StatefulWidget {
     this.mediaPlayback,
   });
 
-  final String deviceId;
-  final String displayName;
+  final OrbitPeerPresentation presentation;
   final String fingerprint;
   final String protocolVersion;
-  final String platform;
   final String osVersion;
   final String pairedAt;
   final String lastSeenAt;
   final List<String> capabilities;
   final Map<String, dynamic>? deviceStatus;
   final MediaPlaybackPresentation? mediaPlayback;
-  final bool isOnline;
-  final bool isSelf;
   final VoidCallback? onOpenClipboardActivity;
   final VoidCallback? onSendFile;
   final VoidCallback? onViewTransferActivity;
   final VoidCallback onClose;
   final VoidCallback? onRevokeTrust;
   final DeviceFocusCopyCallback onCopy;
+
+  String get deviceId => presentation.deviceId;
+  String get displayName => presentation.displayName;
+  String get platform => presentation.platform;
+  bool get isOnline => presentation.isOnline;
+  bool get isSelf => presentation.statusKind == OrbitPeerStatusKind.local;
 
   @override
   State<DeviceFocusView> createState() => _DeviceFocusViewState();
@@ -74,6 +74,11 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   DeviceFocusNodeKind? _activeNode;
   DeviceFocusNodeKind? _closingNode;
   DeviceFocusNodeKind? _hoveredNode;
+
+  MediaPlaybackPresentation? get _liveMediaPlayback =>
+      widget.presentation.activity == OrbitPeerActivity.none
+          ? null
+          : widget.mediaPlayback;
 
   @override
   void initState() {
@@ -221,7 +226,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
 
   @override
   Widget build(BuildContext context) {
-    final targetAccent = widget.mediaPlayback?.accentColor ??
+    final targetAccent = widget.presentation.accentColor ??
         Theme.of(context).colorScheme.primary;
     return AnimatedAccent(
       color: targetAccent,
@@ -310,21 +315,16 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   Widget _buildHeader(ThemeData theme) {
-    final normalizedPlatform = widget.platform.trim().toLowerCase();
-    final platformLabel = const {
-      'android',
-      'ios',
-      'windows',
-      'macos',
-      'linux',
-    }.contains(normalizedPlatform)
-        ? normalizedPlatform.toUpperCase()
-        : null;
+    final platformLabel = devicePlatformLabel(widget.platform);
+    final presentation = widget.presentation;
     final identityDetails = <String>[
       'Device Focus',
       if (platformLabel != null) platformLabel,
       if (widget.osVersion.isNotEmpty && widget.osVersion != 'Unavailable')
         widget.osVersion,
+      presentation.statusLabel!,
+      if (presentation.powerLabel case final powerLabel?) powerLabel,
+      if (presentation.mediaStateLabel case final mediaState?) mediaState,
       if (widget.protocolVersion.isNotEmpty) 'Rift ${widget.protocolVersion}',
       if (!widget.isSelf &&
           widget.lastSeenAt.isNotEmpty &&
@@ -364,6 +364,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
               children: [
                 Text(
                   widget.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium?.copyWith(
                     color: theme.colorScheme.onSurface,
                     fontWeight: FontWeight.w700,
@@ -371,6 +373,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                 ),
                 Text(
                   identityDetails.join(' · '),
+                  key: const ValueKey('device-focus-summary'),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(
@@ -408,17 +411,17 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     Widget core = DeviceCore(
       size: geometry.coreSize,
       displayName: widget.displayName,
-      platformIcon: _platformIcon(widget.platform),
+      platformIcon: devicePlatformIcon(widget.platform),
       isOnline: widget.isOnline,
       entrance: _entranceController,
       online: _onlineController,
       wake: _wakeController,
-      statusLabel: widget.isSelf ? 'This Device' : null,
+      statusLabel: widget.presentation.statusLabel,
+      semanticLabel: widget.presentation.semanticDescription(),
       accentColor: accent,
-      isMediaPlaying: widget.mediaPlayback?.isPlaying ?? false,
-      isMediaBuffering: widget.mediaPlayback?.playbackState == 'buffering',
+      mediaActivity: widget.presentation.activity,
     );
-    if (widget.mediaPlayback?.accentColor != null) {
+    if (widget.presentation.accentColor != null) {
       core = KeyedSubtree(
         key: const ValueKey('device-focus-media-accented'),
         child: core,
@@ -464,11 +467,10 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       },
       accentColor: data.accentColor,
     );
-    if (data.kind == DeviceFocusNodeKind.media &&
-        widget.mediaPlayback != null) {
+    if (data.kind == DeviceFocusNodeKind.media && _liveMediaPlayback != null) {
       child = KeyedSubtree(
         key: ValueKey(
-          'device-focus-media-${widget.mediaPlayback!.playbackState}',
+          'device-focus-media-${_liveMediaPlayback!.playbackState}',
         ),
         child: child,
       );
@@ -582,8 +584,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         _DeviceFocusNodeData(
           kind: DeviceFocusNodeKind.media,
           icon: _nodeIcon(DeviceFocusNodeKind.media),
-          value: widget.mediaPlayback?.displayTitle ?? 'Nothing playing',
-          label: widget.mediaPlayback?.stateLabel ?? 'Media',
+          value: _liveMediaPlayback?.displayTitle ?? 'Nothing playing',
+          label: widget.presentation.mediaStateLabel ?? 'Media',
           accentColor: accent,
         ),
       _DeviceFocusNodeData(
@@ -650,7 +652,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   Widget _buildMediaPanel() {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final media = widget.mediaPlayback;
+    final media = _liveMediaPlayback;
     final hasPosition = media?.positionMs != null &&
         media?.durationMs != null &&
         media!.durationMs! > 0;
@@ -773,7 +775,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
 
   Widget _buildMediaArtworkSlot() {
     final theme = Theme.of(context);
-    final media = widget.mediaPlayback;
+    final media = _liveMediaPlayback;
     final bytes = media?.artworkBytes;
     final identity = media?.artworkIdentity;
     final artwork = bytes == null || identity == null
@@ -1006,9 +1008,10 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   String _powerSummary(Map<String, dynamic> status) {
+    final livePower = widget.presentation.powerLabel;
+    if (livePower != null) return livePower;
+    if (status['isStale'] == true || !widget.isOnline) return 'Status stale';
     if (status['batteryPresent'] == false) return 'No battery';
-    final batteryPercent = status['batteryPercent'];
-    if (batteryPercent is num) return '${batteryPercent.toInt()}%';
     return 'Status';
   }
 
@@ -1051,16 +1054,6 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         'security.event_log' => 'Security event log',
         _ => capability,
       };
-
-  IconData _platformIcon(String? platform) {
-    return switch (platform?.toLowerCase()) {
-      'android' || 'ios' => Icons.smartphone,
-      'windows' => Icons.desktop_windows,
-      'macos' => Icons.laptop_mac,
-      'linux' => Icons.computer,
-      _ => Icons.devices,
-    };
-  }
 }
 
 class _DeviceFocusNodeData {

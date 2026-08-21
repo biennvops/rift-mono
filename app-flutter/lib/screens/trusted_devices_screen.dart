@@ -1551,16 +1551,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   DeviceDetailScreen _buildTrustedPeerDetail({
     required Map<String, dynamic> peer,
-    required bool isOnline,
     required VoidCallback? onClose,
   }) {
-    final deviceId = peer['deviceId']?.toString() ?? '';
-    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final presentation = _trustedPresentationFor(peer);
+    final deviceId = presentation.deviceId;
+    final displayName = presentation.displayName;
+    final deviceStatus = _deviceStatusFor(peer);
+    final enrichedPeer = deviceStatus == null
+        ? peer
+        : <String, dynamic>{...peer, 'deviceStatus': deviceStatus};
     final canOpenActivity = onClose != null && deviceId.isNotEmpty;
     return DeviceDetailScreen(
       key: ValueKey(deviceId.isNotEmpty ? deviceId : displayName),
-      peer: peer,
-      isOnline: isOnline,
+      peer: enrichedPeer,
+      isOnline: presentation.isOnline,
       mediaPlayback: _mediaPlaybackForDevice(deviceId),
       onClose: onClose,
       onOpenClipboardActivity: canOpenActivity
@@ -1869,7 +1873,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         }
         return;
       } else {
-        final isOnline = peer['presence'] == 'online';
         final isDesktop = MediaQuery.of(context).size.width >= 1024;
         final targetId = deviceId ?? titleText;
 
@@ -1887,10 +1890,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         final detailResult =
             await Navigator.of(context).push<Map<String, dynamic>>(
           MaterialPageRoute<Map<String, dynamic>>(
-            builder: (_) => DeviceDetailScreen(
-              key: ValueKey(targetId),
+            builder: (_) => _buildTrustedPeerDetail(
               peer: peer,
-              isOnline: isOnline,
+              onClose: null,
             ),
           ),
         );
@@ -2266,8 +2268,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     autofocus: true,
                     child: _buildTrustedPeerDetail(
                       peer: selectedPeer,
-                      isOnline:
-                          selectedPeer['presence']?.toString() == 'online',
                       onClose: () {
                         _closePeerFocus();
                         unawaited(_loadData());
@@ -2394,10 +2394,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                       child: Focus(
                         autofocus: true,
                         child: NearbyPeerFocus(
-                          deviceId: selectedPeer['deviceId']?.toString() ?? '',
-                          displayName: resolveDeviceDisplayName(selectedPeer),
-                          platform:
-                              selectedPeer['platform']?.toString() ?? 'unknown',
+                          presentation: _nearbyPresentationFor(selectedPeer),
                           endpoint: _endpointFor(selectedPeer),
                           onClose: _closePeerFocus,
                           onPair: () => unawaited(
