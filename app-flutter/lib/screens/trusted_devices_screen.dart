@@ -1051,10 +1051,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final selfId = deviceId.isNotEmpty ? deviceId : 'self';
     final isSelected = isDesktop &&
         (_selectedDeviceId == 'self' || _selectedDeviceId == selfId);
+    void handleTap() {
+      unawaited(_showLocalDeviceDetails(localDeviceInfo));
+    }
 
     return Semantics(
       button: true,
       label: presentation.semanticDescription(),
+      onTap: handleTap,
       excludeSemantics: true,
       child: Material(
         color: isSelected
@@ -1070,7 +1074,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           key: const ValueKey('local-device-card'),
-          onTap: () => _showLocalDeviceDetails(localDeviceInfo),
+          onTap: handleTap,
           child: Stack(
             children: [
               Positioned(
@@ -1198,21 +1202,27 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
     final isSelected =
         isDesktop && deviceId.isNotEmpty && _selectedDeviceId == deviceId;
+    void handleTap() {
+      unawaited(
+        _handlePeerAction(
+          peer: peer,
+          isTrusted: isTrusted,
+          trustState: trustState,
+          titleText: titleText,
+        ),
+      );
+    }
 
     return Semantics(
       button: true,
       label: isPending
           ? '$titleText, pairing pending'
           : presentation.semanticDescription(),
-      excludeSemantics: true,
+      onTap: handleTap,
+      excludeSemantics: !isPending,
       child: InkWell(
         key: ValueKey('trusted-peer-card-$deviceId'),
-        onTap: () => _handlePeerAction(
-          peer: peer,
-          isTrusted: isTrusted,
-          trustState: trustState,
-          titleText: titleText,
-        ),
+        onTap: handleTap,
         borderRadius: BorderRadius.circular(8),
         child: AnimatedContainer(
           duration: RiftMotion.durationOf(context, RiftMotion.normal),
@@ -1377,8 +1387,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         isDesktop && deviceId.isNotEmpty && _selectedDeviceId == deviceId;
 
     return Semantics(
+      container: true,
       label: presentation.semanticDescription(),
-      excludeSemantics: true,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(

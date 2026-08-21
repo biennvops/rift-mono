@@ -24,8 +24,8 @@ class NearbyPeerFocus extends StatelessWidget {
     final colors = theme.colorScheme;
     final platformLabel = devicePlatformLabel(presentation.platform);
     return Semantics(
+      container: true,
       label: presentation.semanticDescription(),
-      excludeSemantics: true,
       child: Stack(
         key: ValueKey('nearby-peer-focus-${presentation.deviceId}'),
         fit: StackFit.expand,
