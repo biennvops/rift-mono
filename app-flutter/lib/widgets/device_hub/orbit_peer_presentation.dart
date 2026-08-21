@@ -66,6 +66,13 @@ class OrbitPeerPresentation {
         OrbitPeerStatusKind.local => 'This Device',
       };
 
+  String? get orbitStatusLabel => switch (statusKind) {
+        OrbitPeerStatusKind.trustedOnline => 'Online',
+        OrbitPeerStatusKind.trustedOffline => 'Offline',
+        OrbitPeerStatusKind.nearby => null,
+        OrbitPeerStatusKind.local => null,
+      };
+
   String get statusSummaryLabel => statusLabel!;
 
   String? get powerLabel => powerStatus == null

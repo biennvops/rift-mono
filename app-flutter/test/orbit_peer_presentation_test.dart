@@ -57,8 +57,10 @@ void main() {
 
       expect(nearby.statusKind, OrbitPeerStatusKind.nearby);
       expect(nearby.statusLabel, 'Nearby');
+      expect(nearby.orbitStatusLabel, isNull);
       expect(local.statusKind, OrbitPeerStatusKind.local);
       expect(local.statusLabel, 'This Device');
+      expect(local.orbitStatusLabel, isNull);
     });
 
     test('uses one trimmed display-name fallback chain', () {

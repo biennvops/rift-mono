@@ -71,7 +71,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     final peer = widget.peer;
     final highlighted = _interacting;
     final compact = widget.size < 100;
-    final status = peer.statusLabel;
+    final status = peer.orbitStatusLabel;
     final powerStatus = peer.statusKind == OrbitPeerStatusKind.trustedOnline
         ? peer.powerStatus
         : null;
