@@ -862,6 +862,29 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('device-focus-close')));
     await tester.pumpAndSettle();
 
+    await client.emitDeviceStatus({
+      'sourceDeviceId': 'rift-battery-peer',
+      'batteryPresent': true,
+      'batteryPercent': 68,
+      'chargingState': 'discharging',
+      'powerSource': 'battery',
+      'isStale': true,
+    });
+    await tester.pump();
+
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('68%'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('orbit-peer-battery-rift-battery-peer')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('orbit-peer-media-paused-rift-battery-peer'),
+      ),
+      findsOneWidget,
+    );
+
     client.trustedPeers = [
       {
         ...client.trustedPeers.first,
@@ -937,6 +960,52 @@ void main() {
       ),
       findsOneWidget,
     );
+
+    Future<void> updatePlayback(String state, int sequence) async {
+      await client.emitMediaUpdated({
+        'sourceDeviceId': 'rift-fixture-phone',
+        'playbackId': 'fixture-session',
+        'appName': 'Player',
+        'title': 'Example Track',
+        'artist': 'Example Artist',
+        'playbackState': state,
+        'updatedAt': '2026-08-01T10:0$sequence:00Z',
+      });
+      await tester.pump();
+    }
+
+    await updatePlayback('paused', 1);
+    expect(find.text('Playing'), findsNothing);
+    expect(find.text('Paused'), findsOneWidget);
+
+    await updatePlayback('playing', 2);
+    expect(find.text('Paused'), findsNothing);
+    expect(find.text('Playing'), findsOneWidget);
+
+    await updatePlayback('buffering', 3);
+    expect(find.text('Playing'), findsNothing);
+    expect(find.text('Buffering'), findsOneWidget);
+
+    await updatePlayback('playing', 4);
+    await client.emitMediaRemoved({
+      'sourceDeviceId': 'rift-fixture-phone',
+      'playbackId': 'fixture-session',
+    });
+    await tester.pump();
+    expect(find.text('Playing'), findsNothing);
+    expect(find.text('Buffering'), findsNothing);
+
+    await client.emitMediaPosted({
+      'sourceDeviceId': 'rift-fixture-phone',
+      'playbackId': 'fixture-session',
+      'appName': 'Player',
+      'title': 'Example Track',
+      'artist': 'Example Artist',
+      'playbackState': 'playing',
+      'updatedAt': '2026-08-01T10:05:00Z',
+    });
+    await tester.pump();
+    expect(find.text('Playing'), findsOneWidget);
 
     await client.emitDeviceStatus({
       'sourceDeviceId': 'rift-fixture-phone',
