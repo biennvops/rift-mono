@@ -271,7 +271,7 @@ void main() {
 
     expect(find.text('Windows Laptop'), findsOneWidget);
     expect(find.text('Local Device'), findsOneWidget);
-    expect(find.text('This Device'), findsOneWidget);
+    expect(find.text('This Device'), findsNWidgets(2));
     expect(find.text('Devices Hub'), findsOneWidget);
   });
 
@@ -816,7 +816,7 @@ void main() {
         (widget) =>
             widget is Semantics &&
             widget.properties.label ==
-                'Charging Phone, trusted device, online, battery 72 percent, charging, Quiet Track paused',
+                'Charging Phone, Android, trusted device, online, battery 72 percent, charging, Quiet Track paused',
       ),
       findsOneWidget,
     );
@@ -1174,7 +1174,7 @@ void main() {
 
     expect(find.text('Phone'), findsOneWidget);
     expect(find.text('TRUSTED'), findsNothing);
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
     expect(find.text('Pair'), findsNothing);
   });
 
@@ -1210,7 +1210,7 @@ void main() {
 
     // Verify Presence indicator
     expect(find.text('Linux Workstation'), findsOneWidget);
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
     expect(find.byIcon(Icons.computer), findsWidgets);
   });
 
@@ -1240,7 +1240,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
 
     client.trustedPeers = [
       {
@@ -1258,7 +1258,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(client.listTrustedPeersCallCount, greaterThan(callsBeforeRefresh));
-    expect(find.text('OFFLINE'), findsOneWidget);
+    expect(find.text('Offline'), findsOneWidget);
   });
 
   testWidgets(
@@ -1957,7 +1957,7 @@ void main() {
         (widget) =>
             widget is Semantics &&
             widget.properties.label ==
-                'Peer B, trusted device, online, buffering Track B',
+                'Peer B, Android, trusted device, online, buffering Track B',
       ),
       findsOneWidget,
     );

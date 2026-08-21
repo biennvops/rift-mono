@@ -66,6 +66,8 @@ class OrbitPeerPresentation {
         OrbitPeerStatusKind.local => 'This Device',
       };
 
+  String get statusSummaryLabel => statusLabel!;
+
   String? get powerLabel => powerStatus == null
       ? null
       : '${powerStatus!.batteryPercent}%${powerStatus!.isCharging ? ' · Charging' : ''}';
@@ -87,7 +89,8 @@ class OrbitPeerPresentation {
       switch (statusKind) {
         OrbitPeerStatusKind.trustedOnline => 'online',
         OrbitPeerStatusKind.trustedOffline => 'offline',
-        OrbitPeerStatusKind.nearby => 'nearby device, ready to pair',
+        OrbitPeerStatusKind.nearby =>
+          role == null ? 'nearby device, ready to pair' : 'ready to pair',
         OrbitPeerStatusKind.local => 'this device',
       },
       if (power != null)
