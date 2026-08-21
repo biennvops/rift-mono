@@ -833,6 +833,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   List<DeviceFocusPanelRow> _powerRows(Map<String, dynamic> status) {
+    final isStale = _isPowerStatusStale(status);
     final rows = <DeviceFocusPanelRow>[];
     final batteryPresent = status['batteryPresent'];
     final batteryPercent = status['batteryPercent'];
@@ -877,7 +878,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     rows.add(
       DeviceFocusPanelRow(
         label: 'Status',
-        value: status['isStale'] == true ? 'Stale · $observedAt' : observedAt,
+        value: isStale ? 'Stale · $observedAt' : observedAt,
       ),
     );
     return rows;
@@ -1007,10 +1008,13 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     );
   }
 
+  bool _isPowerStatusStale(Map<String, dynamic> status) =>
+      status['isStale'] == true || !widget.isOnline;
+
   String _powerSummary(Map<String, dynamic> status) {
     final livePower = widget.presentation.powerLabel;
     if (livePower != null) return livePower;
-    if (status['isStale'] == true || !widget.isOnline) return 'Status stale';
+    if (_isPowerStatusStale(status)) return 'Status stale';
     if (status['batteryPresent'] == false) return 'No battery';
     return 'Status';
   }

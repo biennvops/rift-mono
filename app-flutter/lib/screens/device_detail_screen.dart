@@ -276,8 +276,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   Widget _buildDeviceStatusCard(
     ThemeData theme,
     Map<String, dynamic> status,
-    bool isMobile,
-  ) {
+    bool isMobile, {
+    required bool isOnline,
+  }) {
+    final isStale = status['isStale'] == true || !isOnline;
     final rows = <({IconData icon, String label, String value})>[];
     final batteryPresent = status['batteryPresent'];
     final batteryPercent = status['batteryPercent'];
@@ -319,9 +321,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
     final observedAt = _formatTimestamp(status['observedAt']?.toString());
     rows.add((
-      icon: status['isStale'] == true ? Icons.schedule : Icons.update,
+      icon: isStale ? Icons.schedule : Icons.update,
       label: 'Status',
-      value: status['isStale'] == true ? 'Stale · $observedAt' : observedAt,
+      value: isStale ? 'Stale · $observedAt' : observedAt,
     ));
 
     return Container(
@@ -752,7 +754,12 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               ),
             ),
             if (!widget.isSelf && deviceStatus != null)
-              _buildDeviceStatusCard(theme, deviceStatus, isMobile),
+              _buildDeviceStatusCard(
+                theme,
+                deviceStatus,
+                isMobile,
+                isOnline: presentation.isOnline,
+              ),
             if (!widget.isSelf)
               Container(
                 decoration: BoxDecoration(

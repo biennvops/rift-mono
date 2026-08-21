@@ -300,6 +300,34 @@ void main() {
     expect(find.textContaining('Stale ·'), findsOneWidget);
   });
 
+  testWidgets('DeviceDetailScreen marks cached power stale while offline',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'offline',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPresent': true,
+            'batteryPercent': 82,
+            'observedAt': '2026-07-29T00:00:00Z',
+            'isStale': false,
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client, isOnline: false));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.text('82%'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsOneWidget);
+  });
+
   testWidgets('DeviceDetailScreen renders a peer without a battery',
       (WidgetTester tester) async {
     final client = FakeDeviceDetailClient()
@@ -949,7 +977,7 @@ void main() {
             'batteryPercent': 82,
             'chargingState': 'charging',
             'observedAt': '2026-08-01T10:00:00Z',
-            'isStale': true,
+            'isStale': false,
           },
         },
       ];
