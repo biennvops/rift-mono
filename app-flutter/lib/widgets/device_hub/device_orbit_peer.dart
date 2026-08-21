@@ -75,6 +75,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
         : null;
     final availabilityDescription = switch (peer.statusKind) {
       OrbitPeerStatusKind.nearby => 'ready to pair',
+      OrbitPeerStatusKind.local => 'this device',
       OrbitPeerStatusKind.trustedOffline => 'offline',
       OrbitPeerStatusKind.trustedOnline when powerStatus != null =>
         'online, battery ${powerStatus.batteryPercent} percent${powerStatus.isCharging ? ', charging' : ''}',
