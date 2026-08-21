@@ -212,7 +212,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
       setState(() {
         peer = refreshedPeer!;
-        isOnline = refreshedPeer['presence']?.toString() == 'online';
+        isOnline = isTrustedDeviceOnline(refreshedPeer);
         _wasRemoved = false;
       });
       _scheduleDeviceStatusStaleTransition();

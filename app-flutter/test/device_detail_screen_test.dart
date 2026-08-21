@@ -196,6 +196,28 @@ void main() {
     expect(find.text('Device unavailable'), findsNothing);
   });
 
+  testWidgets('DeviceDetailScreen normalizes presence after daemon refresh',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+    expect(find.text('Online'), findsOneWidget);
+
+    client.trustedPeers = [
+      {...client.trustedPeers.first, 'presence': ' ONLINE '},
+    ];
+    await client.emitTrustChanged({
+      'deviceId': 'rift-phone',
+      'previousState': 'trusted',
+      'newState': 'trusted',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('Offline'), findsNothing);
+  });
+
   testWidgets('DeviceDetailScreen renders and updates peer power status',
       (WidgetTester tester) async {
     final client = FakeDeviceDetailClient()

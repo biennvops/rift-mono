@@ -117,14 +117,16 @@ class OrbitPeerPresentation {
       };
 }
 
+bool isTrustedDeviceOnline(Map<String, dynamic> peer) =>
+    peer['presence']?.toString().trim().toLowerCase() == 'online';
+
 OrbitPeerPresentation buildTrustedDevicePresentation({
   required Map<String, dynamic> peer,
   Map<String, dynamic>? deviceStatus,
   MediaPlaybackPresentation? mediaPlayback,
   bool? isOnline,
 }) {
-  final online =
-      isOnline ?? peer['presence']?.toString().trim().toLowerCase() == 'online';
+  final online = isOnline ?? isTrustedDeviceOnline(peer);
   return _buildDevicePresentation(
     peer: peer,
     statusKind: online
