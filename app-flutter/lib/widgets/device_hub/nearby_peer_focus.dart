@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import 'device_platform_presentation.dart';
-import 'device_summary_status.dart';
 import 'orbit_peer_presentation.dart';
 
 class NearbyPeerFocus extends StatelessWidget {
@@ -102,16 +101,11 @@ class NearbyPeerFocus extends StatelessWidget {
                       ),
                     ],
                     const SizedBox(height: 12),
-                    DeviceSummaryStatus(
-                      presentation: presentation,
-                      accentColor: colors.primary,
-                      alignment: WrapAlignment.center,
-                    ),
-                    const SizedBox(height: 4),
                     Text(
                       'Ready to pair',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colors.onSurfaceVariant,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colors.primary,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 12),

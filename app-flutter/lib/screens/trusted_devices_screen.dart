@@ -1046,7 +1046,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
     final presentation = _localPresentationFor(localDeviceInfo);
     final deviceId = presentation.deviceId;
-    final accent = presentation.accentColor ?? theme.colorScheme.primary;
+    final accent = theme.colorScheme.primary;
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
     final selfId = deviceId.isNotEmpty ? deviceId : 'self';
     final isSelected = isDesktop &&
@@ -1075,69 +1075,54 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         child: InkWell(
           key: const ValueKey('local-device-card'),
           onTap: handleTap,
-          child: Stack(
-            children: [
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 4,
-                child: ColoredBox(color: accent),
-              ),
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        devicePlatformIcon(presentation.platform),
-                        size: 20,
-                        color: accent,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  presentation.displayName,
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    color: theme.colorScheme.onSurface,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Icon(Icons.verified, size: 18, color: accent),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          DeviceSummaryStatus(
-                            presentation: presentation,
-                            accentColor: accent,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  key: const ValueKey('local-device-platform-icon'),
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    devicePlatformIcon(presentation.platform),
+                    size: 20,
+                    color: accent,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        presentation.displayName,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (presentation.powerStatus != null ||
+                          presentation.mediaStateLabel != null) ...[
+                        const SizedBox(height: 4),
+                        DeviceSummaryStatus(
+                          presentation: presentation,
+                          accentColor: accent,
+                          showStatus: false,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1241,39 +1226,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Container(
+                key: ValueKey('trusted-peer-platform-icon-$deviceId'),
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.1),
+                  color: theme.colorScheme.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    Icon(
-                      devicePlatformIcon(presentation.platform),
-                      size: 20,
-                      color: presentation.isOnline
-                          ? accent
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                    Positioned(
-                      top: -4,
-                      right: -4,
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: presentation.isOnline
-                              ? accent
-                              : theme.colorScheme.outlineVariant,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                      ),
-                    ),
-                  ],
+                child: Icon(
+                  devicePlatformIcon(presentation.platform),
+                  size: 20,
+                  color: theme.colorScheme.primary,
                 ),
               ),
               const SizedBox(width: 10),
@@ -1570,7 +1533,18 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final enrichedPeer = deviceStatus == null
         ? peer
         : <String, dynamic>{...peer, 'deviceStatus': deviceStatus};
-    final canOpenActivity = onClose != null && deviceId.isNotEmpty;
+    final canOpenActivity = deviceId.isNotEmpty;
+    void openActivity(String route) {
+      if (onClose == null) {
+        Navigator.of(context).pop();
+      }
+      _showActivityForPeer(
+        route: route,
+        deviceId: deviceId,
+        displayName: displayName,
+      );
+    }
+
     return DeviceDetailScreen(
       key: ValueKey(deviceId.isNotEmpty ? deviceId : displayName),
       peer: enrichedPeer,
@@ -1578,25 +1552,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       mediaPlayback: _mediaPlaybackForDevice(deviceId),
       onClose: onClose,
       onOpenClipboardActivity: canOpenActivity
-          ? () => _showActivityForPeer(
-                route: NotificationRoute.historyClipboard,
-                deviceId: deviceId,
-                displayName: displayName,
-              )
+          ? () => openActivity(NotificationRoute.historyClipboard)
           : null,
       onSendFile: canOpenActivity
-          ? () => _showActivityForPeer(
-                route: NotificationRoute.historySend,
-                deviceId: deviceId,
-                displayName: displayName,
-              )
+          ? () => openActivity(NotificationRoute.historySend)
           : null,
       onViewTransferActivity: canOpenActivity
-          ? () => _showActivityForPeer(
-                route: NotificationRoute.historyTransferActivity,
-                deviceId: deviceId,
-                displayName: displayName,
-              )
+          ? () => openActivity(NotificationRoute.historyTransferActivity)
           : null,
     );
   }

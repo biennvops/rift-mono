@@ -10,12 +10,14 @@ class DeviceSummaryStatus extends StatelessWidget {
     required this.accentColor,
     this.mutedColor,
     this.alignment = WrapAlignment.start,
+    this.showStatus = true,
   });
 
   final OrbitPeerPresentation presentation;
   final Color accentColor;
   final Color? mutedColor;
   final WrapAlignment alignment;
+  final bool showStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +37,19 @@ class DeviceSummaryStatus extends StatelessWidget {
       runSpacing: 3,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
+        if (showStatus)
+          _SummaryItem(
+            icon: Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                color: liveColor,
+                shape: BoxShape.circle,
+              ),
+            ),
+            label: presentation.statusSummaryLabel,
+            style: style?.copyWith(color: liveColor),
+          ),
         if (power != null)
           _SummaryItem(
             icon: Icon(
@@ -47,18 +62,6 @@ class DeviceSummaryStatus extends StatelessWidget {
             label: presentation.powerLabel!,
             style: style?.copyWith(color: liveColor),
           ),
-        _SummaryItem(
-          icon: Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(
-              color: liveColor,
-              shape: BoxShape.circle,
-            ),
-          ),
-          label: presentation.statusSummaryLabel,
-          style: style?.copyWith(color: liveColor),
-        ),
         if (mediaLabel != null)
           _SummaryItem(
             icon: DevicePlaybackStatusGlyph(

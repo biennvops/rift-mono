@@ -6,16 +6,26 @@ import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
 import '../src/media_playback/playback_presentation.dart';
+import '../widgets/device_focus/device_detail_content.dart';
 import '../widgets/device_focus/device_focus_view.dart';
 import '../widgets/device_hub/device_platform_presentation.dart';
 import '../widgets/device_hub/device_summary_status.dart';
 import '../widgets/device_hub/orbit_peer_presentation.dart';
 import '../widgets/rift_snackbar.dart';
 
-const _kSuccessColor = Color(0xFF047857);
-const _kSuccessBgColor = Color(0x14047857);
-
 class DeviceDetailScreen extends StatefulWidget {
+  const DeviceDetailScreen({
+    super.key,
+    required this.peer,
+    required this.isOnline,
+    this.isSelf = false,
+    this.mediaPlayback,
+    this.onClose,
+    this.onOpenClipboardActivity,
+    this.onSendFile,
+    this.onViewTransferActivity,
+  });
+
   final Map<String, dynamic> peer;
   final bool isOnline;
   final bool isSelf;
@@ -24,18 +34,6 @@ class DeviceDetailScreen extends StatefulWidget {
   final VoidCallback? onSendFile;
   final VoidCallback? onViewTransferActivity;
   final VoidCallback? onClose;
-
-  const DeviceDetailScreen({
-    this.onClose,
-    this.onOpenClipboardActivity,
-    this.onSendFile,
-    this.onViewTransferActivity,
-    super.key,
-    required this.peer,
-    required this.isOnline,
-    this.isSelf = false,
-    this.mediaPlayback,
-  });
 
   @override
   State<DeviceDetailScreen> createState() => _DeviceDetailScreenState();
@@ -110,9 +108,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       return;
     }
     _deviceStatusStaleTimer = Timer(_deviceStatusStaleAfter, () {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       final currentStatus = peer['deviceStatus'];
       if (currentStatus is! Map || currentStatus['isStale'] == true) {
         return;
@@ -127,9 +123,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   void _handleTrustChanged(Map<String, dynamic> event) {
     final eventDeviceId = event['deviceId']?.toString();
-    if (eventDeviceId == null || eventDeviceId != _deviceId) {
-      return;
-    }
+    if (eventDeviceId == null || eventDeviceId != _deviceId) return;
 
     final newState = event['newState']?.toString();
     if (newState == 'trusted') {
@@ -166,9 +160,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   void _handleDeviceStatus(Map<String, dynamic> event) {
-    if (event['sourceDeviceId']?.toString() != _deviceId || !mounted) {
-      return;
-    }
+    if (event['sourceDeviceId']?.toString() != _deviceId || !mounted) return;
     setState(() {
       peer = Map<String, dynamic>.from(peer)
         ..['deviceStatus'] = Map<String, dynamic>.from(event);
@@ -177,14 +169,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _refreshPeerFromDaemon() async {
-    if (!mounted || _deviceId.isEmpty || _isRefreshing) {
-      return;
-    }
+    if (!mounted || _deviceId.isEmpty || _isRefreshing) return;
 
     final client = context.read<JsonRpcRiftClient>();
-    if (!client.isConnected) {
-      return;
-    }
+    if (!client.isConnected) return;
 
     _isRefreshing = true;
     try {
@@ -233,132 +221,25 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         : '';
   }
 
-  String _formatFingerprint(String fp) {
-    final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+  String _formatFingerprint(String fingerprint) {
+    final clean =
+        fingerprint.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
     if (clean.isEmpty) return 'Unavailable';
     final chunks = <String>[];
-    for (int i = 0; i < clean.length; i += 4) {
+    for (var index = 0; index < clean.length; index += 4) {
       chunks.add(
-        clean.substring(i, (i + 4) > clean.length ? clean.length : i + 4),
+        clean.substring(
+          index,
+          (index + 4) > clean.length ? clean.length : index + 4,
+        ),
       );
     }
     return chunks.join('-');
   }
 
-  String _formatTimestamp(String? raw) {
-    if (raw == null || raw.isEmpty) return 'Unavailable';
-    final parsed = DateTime.tryParse(raw)?.toLocal();
-    if (parsed == null) return raw;
-    final yyyy = parsed.year.toString().padLeft(4, '0');
-    final mm = parsed.month.toString().padLeft(2, '0');
-    final dd = parsed.day.toString().padLeft(2, '0');
-    final hh = parsed.hour.toString().padLeft(2, '0');
-    final min = parsed.minute.toString().padLeft(2, '0');
-    final sec = parsed.second.toString().padLeft(2, '0');
-    return '$yyyy-$mm-$dd $hh:$min:$sec';
-  }
-
-  String _formatChargingState(String value) => switch (value) {
-        'charging' => 'Charging',
-        'discharging' => 'Discharging',
-        'full' => 'Full',
-        'notCharging' => 'Not charging',
-        _ => 'Unknown',
-      };
-
-  String _formatPowerSource(String value) => switch (value) {
-        'ac' => 'AC power',
-        'usb' => 'USB power',
-        'battery' => 'Battery',
-        _ => 'Unknown',
-      };
-
-  Widget _buildDeviceStatusCard(
-    ThemeData theme,
-    Map<String, dynamic> status,
-    bool isMobile, {
-    required bool isOnline,
-  }) {
-    final isStale = status['isStale'] == true || !isOnline;
-    final rows = <({IconData icon, String label, String value})>[];
-    final batteryPresent = status['batteryPresent'];
-    final batteryPercent = status['batteryPercent'];
-    if (batteryPresent == false) {
-      rows.add((
-        icon: Icons.battery_0_bar,
-        label: 'Battery',
-        value: 'No battery',
-      ));
-    } else if (batteryPercent is num) {
-      rows.add((
-        icon: Icons.battery_std,
-        label: 'Battery',
-        value: '${batteryPercent.toInt()}%',
-      ));
-    }
-    final chargingState = status['chargingState']?.toString();
-    if (chargingState != null) {
-      rows.add((
-        icon: Icons.battery_charging_full,
-        label: 'Charging state',
-        value: _formatChargingState(chargingState),
-      ));
-    }
-    final powerSource = status['powerSource']?.toString();
-    if (powerSource != null) {
-      rows.add((
-        icon: Icons.power,
-        label: 'Power source',
-        value: _formatPowerSource(powerSource),
-      ));
-    }
-    if (status['lowPowerMode'] is bool) {
-      rows.add((
-        icon: Icons.energy_savings_leaf_outlined,
-        label: 'Low Power Mode',
-        value: status['lowPowerMode'] == true ? 'On' : 'Off',
-      ));
-    }
-    final observedAt = _formatTimestamp(status['observedAt']?.toString());
-    rows.add((
-      icon: isStale ? Icons.schedule : Icons.update,
-      label: 'Status',
-      value: isStale ? 'Stale · $observedAt' : observedAt,
-    ));
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-      ),
-      padding: EdgeInsets.all(isMobile ? 16 : 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Power status',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -0.01,
-              height: 32 / 24,
-              color: theme.colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(height: 16),
-          for (var index = 0; index < rows.length; index++)
-            _buildIdentityRow(
-              theme,
-              rows[index].icon,
-              rows[index].label,
-              rows[index].value,
-              isLast: index == rows.length - 1,
-            ),
-        ],
-      ),
-    );
+  String _diagnosticValue(Object? value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? 'Unavailable' : text;
   }
 
   void _copyToClipboard(String text, String message) {
@@ -370,176 +251,31 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
   }
 
-  Future<bool> _showForgetBottomSheet(
-    String displayName,
-    String fingerprint,
-  ) async {
+  Future<bool> _showRevokeDialog(String displayName) async {
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) {
-        final dialogTheme = Theme.of(ctx);
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(16),
-          child: Container(
-            width: double.infinity,
-            constraints: const BoxConstraints(maxWidth: 400),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: dialogTheme.colorScheme.outlineVariant),
-              boxShadow: [
-                BoxShadow(
-                  color: dialogTheme.colorScheme.primaryContainer
-                      .withValues(alpha: 0.1),
-                  blurRadius: 40,
-                  offset: const Offset(0, 20),
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 64,
-                  height: 64,
-                  margin: const EdgeInsets.only(bottom: 8),
-                  decoration: BoxDecoration(
-                    color: dialogTheme.colorScheme.errorContainer,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Icon(
-                      Icons.warning,
-                      color: dialogTheme.colorScheme.onErrorContainer,
-                      size: 32,
-                    ),
-                  ),
-                ),
-                Text(
-                  'Revoke Trust?',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.01,
-                    height: 32 / 24,
-                    color: dialogTheme.colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                RichText(
-                  textAlign: TextAlign.center,
-                  text: TextSpan(
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w400,
-                      height: 24 / 16,
-                      color: dialogTheme.colorScheme.onSurfaceVariant,
-                    ),
-                    children: [
-                      const TextSpan(
-                          text: 'This will stop all communication with '),
-                      TextSpan(
-                        text: displayName,
-                        style: TextStyle(
-                          color: dialogTheme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const TextSpan(
-                          text:
-                              '. You will need to re-pair to restore access.'),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final isMobile = constraints.maxWidth < 300;
-                    if (isMobile) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          FilledButton(
-                            onPressed: () => Navigator.of(ctx).pop(true),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: dialogTheme.colorScheme.error,
-                              foregroundColor: dialogTheme.colorScheme.onError,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4)),
-                            ),
-                            child: const Text('Revoke Trust',
-                                style: TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600)),
-                          ),
-                          const SizedBox(height: 12),
-                          OutlinedButton(
-                            onPressed: () => Navigator.of(ctx).pop(false),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor:
-                                  dialogTheme.colorScheme.primaryContainer,
-                              side: BorderSide(
-                                  color:
-                                      dialogTheme.colorScheme.primaryContainer),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4)),
-                            ),
-                            child: const Text('Cancel',
-                                style: TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600)),
-                          ),
-                        ],
-                      );
-                    }
-                    return Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.of(ctx).pop(false),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor:
-                                  dialogTheme.colorScheme.primaryContainer,
-                              side: BorderSide(
-                                  color:
-                                      dialogTheme.colorScheme.primaryContainer),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4)),
-                            ),
-                            child: const Text('Cancel',
-                                style: TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600)),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: FilledButton(
-                            onPressed: () => Navigator.of(ctx).pop(true),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: dialogTheme.colorScheme.error,
-                              foregroundColor: dialogTheme.colorScheme.onError,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4)),
-                            ),
-                            child: const Text('Revoke Trust',
-                                style: TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600)),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
+      builder: (dialogContext) {
+        final colors = Theme.of(dialogContext).colorScheme;
+        return AlertDialog(
+          title: const Text('Revoke Trust?'),
+          content: Text(
+            'This will stop all communication with $displayName. '
+            'You will need to re-pair to restore access.',
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: colors.error,
+                foregroundColor: colors.onError,
+              ),
+              child: const Text('Revoke Trust'),
+            ),
+          ],
         );
       },
     );
@@ -549,13 +285,12 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   Future<void> _forgetPeer() async {
     final deviceId = peer['deviceId']?.toString();
     final displayName = resolveDeviceDisplayName(peer);
-    final fingerprint = peer['fingerprint']?.toString() ?? 'Unknown';
     if (deviceId == null) return;
+
+    final confirmed = await _showRevokeDialog(displayName);
+    if (!confirmed || !mounted) return;
+
     final client = context.read<JsonRpcRiftClient>();
-
-    final confirmed = await _showForgetBottomSheet(displayName, fingerprint);
-    if (!confirmed) return;
-
     try {
       await client.revokeTrust(
         deviceId,
@@ -571,11 +306,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           'displayName': displayName,
         });
       }
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
       RiftSnackbar.show(
         context: context,
-        message: 'Error: $e',
+        message: 'Error: $error',
         type: RiftSnackbarType.error,
       );
     }
@@ -583,514 +318,459 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final theme = Theme.of(context);
-        final isEmbedded = widget.onClose != null;
-        final isMobile = isEmbedded || constraints.maxWidth < 768;
-
-        final rawDeviceId = peer['deviceId']?.toString().trim() ?? '';
-        final deviceStatus = peer['deviceStatus'] is Map
-            ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
-            : null;
-        final presentation = widget.isSelf
-            ? buildLocalDevicePresentation(
-                device: peer,
-                deviceStatus: deviceStatus,
-                mediaPlayback: widget.mediaPlayback,
-              )
-            : buildTrustedDevicePresentation(
-                peer: peer,
-                deviceStatus: deviceStatus,
-                mediaPlayback: widget.mediaPlayback,
-                isOnline: isOnline,
-              );
-        final deviceId = rawDeviceId.isNotEmpty ? rawDeviceId : 'Unknown ID';
-        final displayName = presentation.displayName;
-        final fingerprint = _resolveFingerprint(deviceId);
-        final protocolVersion = peer['protocolVersion']?.toString() ?? 'v2.4.0';
-        final platform = presentation.platform;
-        final rawPlatform = peer['platform']?.toString().trim() ?? '';
-        final platformDiagnostic = devicePlatformLabel(platform) ??
-            (rawPlatform.isNotEmpty ? rawPlatform : 'Unknown');
-        final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
-        final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
-        final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
-
-        if (_wasRemoved) {
-          return Scaffold(
-            backgroundColor: theme.colorScheme.surface,
-            body: _buildRemovedState(theme, displayName),
-          );
-        }
-
-        final useDesktopFocusView = widget.onClose != null &&
-            (widget.isSelf || peer['trustState']?.toString() == 'trusted');
-        if (useDesktopFocusView) {
-          final capabilities = (peer['capabilities'] as List?)
-                  ?.map((capability) => capability.toString())
-                  .toList(growable: false) ??
-              const <String>[];
-          return DeviceFocusView(
-            presentation: presentation,
-            fingerprint: _formatFingerprint(fingerprint),
-            protocolVersion: protocolVersion,
-            osVersion: osVersion,
-            pairedAt: pairedAt,
-            lastSeenAt: lastSeenAt,
-            capabilities: capabilities,
+    final theme = Theme.of(context);
+    final rawDeviceId = peer['deviceId']?.toString().trim() ?? '';
+    final deviceStatus = peer['deviceStatus'] is Map
+        ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
+        : null;
+    final presentation = widget.isSelf
+        ? buildLocalDevicePresentation(
+            device: peer,
             deviceStatus: deviceStatus,
             mediaPlayback: widget.mediaPlayback,
-            onClose: widget.onClose!,
-            onRevokeTrust: widget.isSelf ? null : _forgetPeer,
-            onCopy: _copyToClipboard,
-            onOpenClipboardActivity: widget.onOpenClipboardActivity,
-            onSendFile: widget.onSendFile,
-            onViewTransferActivity: widget.onViewTransferActivity,
+          )
+        : buildTrustedDevicePresentation(
+            peer: peer,
+            deviceStatus: deviceStatus,
+            mediaPlayback: widget.mediaPlayback,
+            isOnline: isOnline,
           );
-        }
+    final deviceId = rawDeviceId.isEmpty ? 'Unknown ID' : rawDeviceId;
+    final rawPlatform = peer['platform']?.toString().trim() ?? '';
+    final platformLabel = devicePlatformLabel(presentation.platform) ??
+        (rawPlatform.isEmpty ? 'Unknown' : rawPlatform);
+    final fingerprint = _formatFingerprint(_resolveFingerprint(deviceId));
+    final protocolVersion = _diagnosticValue(peer['protocolVersion']);
+    final osVersion = _diagnosticValue(peer['osVersion']);
+    final pairedAt = formatDeviceTimestamp(peer['pairedAt']?.toString());
+    final lastSeenAt = formatDeviceTimestamp(peer['lastSeenAt']?.toString());
+    final capabilities = (peer['capabilities'] as List?)
+            ?.map((capability) => capability.toString())
+            .toList(growable: false) ??
+        const <String>[];
 
-        Widget mainContent = Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (!widget.isSelf)
-              Container(
-                margin: const EdgeInsets.only(bottom: 24),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: theme.colorScheme.outlineVariant),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Stack(
-                    children: [
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: 4,
-                        child: Container(color: _kSuccessColor),
-                      ),
-                      Padding(
-                        padding: EdgeInsets.all(isMobile ? 16 : 20),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: const BoxDecoration(
-                                color: _kSuccessBgColor,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.verified_user,
-                                  color: _kSuccessColor, size: 22),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Authorized Trusted Peer',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: theme.colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Trust established $pairedAt',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            Container(
-              margin: const EdgeInsets.only(bottom: 24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-              ),
-              padding: EdgeInsets.all(isMobile ? 16 : 24),
+    if (_wasRemoved) {
+      return Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        body: _buildRemovedState(theme, presentation.displayName),
+      );
+    }
+
+    final useDesktopFocusView = widget.onClose != null &&
+        (widget.isSelf || peer['trustState']?.toString() == 'trusted');
+    if (useDesktopFocusView) {
+      return DeviceFocusView(
+        presentation: presentation,
+        fingerprint: fingerprint,
+        protocolVersion: protocolVersion,
+        osVersion: osVersion,
+        pairedAt: pairedAt,
+        lastSeenAt: lastSeenAt,
+        capabilities: capabilities,
+        deviceStatus: deviceStatus,
+        mediaPlayback: widget.mediaPlayback,
+        onClose: widget.onClose!,
+        onRevokeTrust: widget.isSelf ? null : _forgetPeer,
+        onCopy: _copyToClipboard,
+        onOpenClipboardActivity: widget.onOpenClipboardActivity,
+        onSendFile: widget.onSendFile,
+        onViewTransferActivity: widget.onViewTransferActivity,
+      );
+    }
+
+    return _buildMobileDetail(
+      theme: theme,
+      presentation: presentation,
+      platformLabel: platformLabel,
+      deviceId: deviceId,
+      fingerprint: fingerprint,
+      protocolVersion: protocolVersion,
+      osVersion: osVersion,
+      pairedAt: pairedAt,
+      lastSeenAt: lastSeenAt,
+      capabilities: capabilities,
+      deviceStatus: deviceStatus,
+    );
+  }
+
+  Widget _buildMobileDetail({
+    required ThemeData theme,
+    required OrbitPeerPresentation presentation,
+    required String platformLabel,
+    required String deviceId,
+    required String fingerprint,
+    required String protocolVersion,
+    required String osVersion,
+    required String pairedAt,
+    required String lastSeenAt,
+    required List<String> capabilities,
+    required Map<String, dynamic>? deviceStatus,
+  }) {
+    final colors = theme.colorScheme;
+    final liveMedia = presentation.activity == OrbitPeerActivity.none
+        ? null
+        : widget.mediaPlayback;
+    final showMedia = widget.isSelf ||
+        capabilities.contains('media.playback') ||
+        widget.mediaPlayback != null;
+    final mediaAccent = liveMedia?.accentColor ?? colors.primary;
+    final showSecurity =
+        !widget.isSelf && peer['trustState']?.toString() == 'trusted';
+
+    return Scaffold(
+      key: const ValueKey('device-detail-mobile'),
+      backgroundColor: colors.surface,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    widget.isSelf ? 'Device details' : 'Identity',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: -0.01,
-                      height: 32 / 24,
-                      color: theme.colorScheme.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildIdentityRow(theme, Icons.badge, 'Device ID', deviceId,
-                      isCode: true),
-                  _buildIdentityRow(theme, Icons.fingerprint, 'Fingerprint',
-                      _formatFingerprint(fingerprint),
-                      isCode: true),
-                  _buildIdentityRow(theme, Icons.desktop_windows, 'Platform',
-                      platformDiagnostic),
-                  _buildIdentityRow(theme, Icons.info, 'OS Version', osVersion),
-                  _buildIdentityRow(
-                      theme, Icons.dns, 'Rift Client Version', protocolVersion,
-                      isLast: true),
-                ],
-              ),
-            ),
-            if (!widget.isSelf && deviceStatus != null)
-              _buildDeviceStatusCard(
-                theme,
-                deviceStatus,
-                isMobile,
-                isOnline: presentation.isOnline,
-              ),
-            if (!widget.isSelf)
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: theme.colorScheme.outlineVariant),
-                ),
-                padding: EdgeInsets.all(isMobile ? 16 : 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Capabilities',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -0.01,
-                        height: 32 / 24,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Manage what data can be synchronized with this device.',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        height: 24 / 16,
-                        color: theme.colorScheme.onSurfaceVariant,
+                  _buildMobileHeader(theme, presentation, platformLabel),
+                  const SizedBox(height: 24),
+                  if (showMedia) ...[
+                    _DeviceDetailSection(
+                      key: const ValueKey('device-detail-section-media'),
+                      title: 'Media',
+                      icon: Icons.graphic_eq,
+                      accentColor: mediaAccent,
+                      child: DeviceMediaDetailsView(
+                        media: liveMedia,
+                        accentColor: mediaAccent,
                       ),
                     ),
                     const SizedBox(height: 16),
-                    _buildCapabilityToggle(
-                        theme,
-                        Icons.content_paste,
-                        'Clipboard Sync',
-                        'Allow shared clipboard access',
-                        true),
-                    const SizedBox(height: 12),
-                    _buildCapabilityToggle(theme, Icons.chevron_right,
-                        'File Transfer', 'Allow secure file dropping', true),
                   ],
-                ),
-              ),
-          ],
-        );
-
-        Widget sidePanel = Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: theme.colorScheme.outlineVariant),
-          ),
-          padding: EdgeInsets.all(isMobile ? 16 : 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Actions',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.01,
-                  height: 32 / 24,
-                  color: theme.colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Device Name',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  height: 20 / 14,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 4),
-              TextField(
-                controller: TextEditingController(text: displayName),
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                  height: 24 / 16,
-                  color: theme.colorScheme.onSurface,
-                ),
-                decoration: InputDecoration(
-                  filled: false,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide:
-                          BorderSide(color: theme.colorScheme.outlineVariant)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(
-                          color: theme.colorScheme.primaryContainer, width: 2)),
-                ),
-                readOnly: true,
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24.0),
-                child:
-                    Divider(height: 1, color: theme.colorScheme.outlineVariant),
-              ),
-              if (widget.isSelf) ...[
-                OutlinedButton.icon(
-                  onPressed: () => _copyToClipboard(
-                      deviceId, 'Device ID copied to clipboard'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.primaryContainer,
-                    side: BorderSide(color: theme.colorScheme.primaryContainer),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    minimumSize: const Size(double.infinity, 44),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4)),
-                  ),
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy Device ID',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () => _copyToClipboard(
-                      _formatFingerprint(fingerprint),
-                      'Fingerprint copied to clipboard'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.primaryContainer,
-                    side: BorderSide(color: theme.colorScheme.primaryContainer),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    minimumSize: const Size(double.infinity, 44),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4)),
-                  ),
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy Fingerprint',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                ),
-              ] else
-                OutlinedButton.icon(
-                  onPressed: _forgetPeer,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.error,
-                    side: BorderSide(color: theme.colorScheme.error),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    minimumSize: const Size(double.infinity, 48),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4)),
-                  ),
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  label: const Text('Revoke Trust',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                ),
-            ],
-          ),
-        );
-
-        return Scaffold(
-          backgroundColor: theme.colorScheme.surface,
-          body: SafeArea(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.symmetric(
-                  horizontal: isMobile ? 16 : 32, vertical: 32),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 896),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 32),
-                        padding: const EdgeInsets.only(bottom: 24),
-                        decoration: BoxDecoration(
-                          border: Border(
-                              bottom: BorderSide(
-                                  color: theme.colorScheme.outlineVariant)),
-                        ),
-                        child: Row(
-                          children: [
-                            if (widget.onClose == null) ...[
-                              IconButton(
-                                icon: const Icon(Icons.arrow_back),
-                                color: theme.colorScheme.onSurfaceVariant,
-                                onPressed: () => Navigator.of(context).pop(),
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primaryContainer
-                                    .withValues(alpha: 0.16),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                    color: theme.colorScheme.outlineVariant),
-                              ),
-                              child: Icon(devicePlatformIcon(platform),
-                                  color: theme.colorScheme.primary, size: 28),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    displayName,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: isMobile ? 24 : 32,
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: isMobile ? -0.01 : -0.02,
-                                      height: isMobile ? 32 / 24 : 40 / 32,
-                                      color: theme.colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 4,
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    children: [
-                                      DeviceSummaryStatus(
-                                        key: const ValueKey(
-                                          'device-detail-summary',
-                                        ),
-                                        presentation: presentation,
-                                        accentColor: presentation.accentColor ??
-                                            theme.colorScheme.primary,
-                                      ),
-                                      Text(
-                                        widget.isSelf
-                                            ? 'Local host device'
-                                            : 'Last seen $lastSeenAt',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w400,
-                                          height: 20 / 14,
-                                          color: theme
-                                              .colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                  if (deviceStatus != null) ...[
+                    _DeviceDetailSection(
+                      key: const ValueKey('device-detail-section-power'),
+                      title: 'Power status',
+                      icon: Icons.battery_charging_full,
+                      child: _buildPowerDetails(
+                        deviceStatus,
+                        presentation.isOnline,
                       ),
-                      if (isMobile)
-                        Column(
-                          children: [
-                            mainContent,
-                            const SizedBox(height: 24),
-                            sidePanel,
-                          ],
-                        )
-                      else
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(flex: 2, child: mainContent),
-                            const SizedBox(width: 24),
-                            Expanded(flex: 1, child: sidePanel),
-                          ],
-                        ),
-                    ],
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  _DeviceDetailSection(
+                    key: const ValueKey('device-detail-section-features'),
+                    title: 'Features',
+                    icon: Icons.extension_outlined,
+                    child: DeviceFeaturesView(
+                      capabilities: capabilities,
+                      onOpenClipboardActivity: widget.onOpenClipboardActivity,
+                      onSendFile: widget.onSendFile,
+                      onViewTransferActivity: widget.onViewTransferActivity,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  if (showSecurity) ...[
+                    _DeviceDetailSection(
+                      key: const ValueKey('device-detail-section-security'),
+                      title: 'Security',
+                      icon: Icons.verified_user_outlined,
+                      child: _buildSecurityDetails(
+                        theme,
+                        pairedAt,
+                        fingerprint,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  _DeviceDetailSection(
+                    key: const ValueKey('device-detail-section-identity'),
+                    title: 'Identity',
+                    icon: Icons.badge_outlined,
+                    child: _buildIdentityDetails(
+                      presentation: presentation,
+                      platformLabel: platformLabel,
+                      deviceId: deviceId,
+                      fingerprint: fingerprint,
+                      protocolVersion: protocolVersion,
+                      osVersion: osVersion,
+                      lastSeenAt: lastSeenAt,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileHeader(
+    ThemeData theme,
+    OrbitPeerPresentation presentation,
+    String platformLabel,
+  ) {
+    final colors = theme.colorScheme;
+    final hasLiveSummary = !widget.isSelf ||
+        presentation.powerStatus != null ||
+        presentation.mediaStateLabel != null;
+
+    return Column(
+      key: const ValueKey('device-detail-header'),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: IconButton(
+            key: const ValueKey('device-detail-back'),
+            tooltip: 'Back',
+            onPressed: widget.onClose ?? () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.arrow_back),
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        Container(
+          width: 64,
+          height: 64,
+          decoration: BoxDecoration(
+            color: colors.primaryContainer.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Icon(
+            devicePlatformIcon(presentation.platform),
+            size: 32,
+            color: colors.primary,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          presentation.displayName,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            color: colors.onSurface,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          platformLabel,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        if (hasLiveSummary) ...[
+          const SizedBox(height: 8),
+          DeviceSummaryStatus(
+            key: const ValueKey('device-detail-summary'),
+            presentation: presentation,
+            accentColor: colors.primary,
+            alignment: WrapAlignment.center,
+            showStatus: !widget.isSelf,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPowerDetails(
+    Map<String, dynamic> status,
+    bool isOnline,
+  ) {
+    final details = DevicePowerDetails.fromStatus(
+      status,
+      isOnline: isOnline,
+    );
+    return _buildRows(
+      details.rows
+          .map(
+            (row) => _MobileDetailRow(
+              icon: _powerRowIcon(row.label),
+              label: row.label,
+              value: row.value,
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  IconData _powerRowIcon(String label) => switch (label) {
+        'Battery' => Icons.battery_std,
+        'Charging state' => Icons.battery_charging_full,
+        'Power source' => Icons.power,
+        'Low Power Mode' => Icons.energy_savings_leaf_outlined,
+        _ => Icons.schedule,
+      };
+
+  Widget _buildSecurityDetails(
+    ThemeData theme,
+    String pairedAt,
+    String fingerprint,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildRows([
+          const _MobileDetailRow(
+            icon: Icons.verified_user_outlined,
+            label: 'Trust',
+            value: 'Trusted',
+          ),
+          _MobileDetailRow(
+            icon: Icons.event_available_outlined,
+            label: 'Trust established',
+            value: pairedAt,
+          ),
+          _MobileDetailRow(
+            icon: Icons.fingerprint,
+            label: 'Fingerprint',
+            value: fingerprint,
+            monospace: true,
+          ),
+        ]),
+        const SizedBox(height: 16),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (fingerprint != 'Unavailable')
+              OutlinedButton.icon(
+                key: const ValueKey('device-detail-copy-fingerprint'),
+                onPressed: () => _copyToClipboard(
+                  fingerprint,
+                  'Fingerprint copied to clipboard',
+                ),
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy fingerprint'),
+              ),
+            OutlinedButton.icon(
+              key: const ValueKey('device-detail-revoke-trust'),
+              onPressed: _forgetPeer,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: theme.colorScheme.error,
+                side: BorderSide(color: theme.colorScheme.error),
+              ),
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('Revoke Trust'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildIdentityDetails({
+    required OrbitPeerPresentation presentation,
+    required String platformLabel,
+    required String deviceId,
+    required String fingerprint,
+    required String protocolVersion,
+    required String osVersion,
+    required String lastSeenAt,
+  }) {
+    final rows = <Widget>[
+      _MobileDetailRow(
+        icon: Icons.badge_outlined,
+        label: 'Device ID',
+        value: deviceId,
+        monospace: true,
+        onCopy: deviceId == 'Unknown ID'
+            ? null
+            : () => _copyToClipboard(
+                  deviceId,
+                  'Device ID copied to clipboard',
+                ),
+      ),
+      if (widget.isSelf)
+        _MobileDetailRow(
+          icon: Icons.fingerprint,
+          label: 'Fingerprint',
+          value: fingerprint,
+          monospace: true,
+          onCopy: fingerprint != 'Unavailable'
+              ? () => _copyToClipboard(
+                    fingerprint,
+                    'Fingerprint copied to clipboard',
+                  )
+              : null,
+        ),
+      _MobileDetailRow(
+        icon: devicePlatformIcon(presentation.platform),
+        label: 'Platform',
+        value: platformLabel,
+      ),
+      _MobileDetailRow(
+        icon: Icons.info_outline,
+        label: 'OS Version',
+        value: osVersion,
+      ),
+      _MobileDetailRow(
+        icon: Icons.dns_outlined,
+        label: 'Rift Client / Protocol Version',
+        value: protocolVersion,
+      ),
+      if (!widget.isSelf)
+        _MobileDetailRow(
+          icon: Icons.history,
+          label: 'Last seen',
+          value: lastSeenAt,
+        ),
+    ];
+    return _buildRows(rows);
+  }
+
+  Widget _buildRows(List<Widget> rows) {
+    return Column(
+      children: [
+        for (var index = 0; index < rows.length; index++) ...[
+          rows[index],
+          if (index != rows.length - 1) const Divider(height: 1),
+        ],
+      ],
     );
   }
 
   Widget _buildRemovedState(ThemeData theme, String displayName) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.errorContainer,
-                shape: BoxShape.circle,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.errorContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.device_unknown,
+                  size: 36,
+                  color: theme.colorScheme.onErrorContainer,
+                ),
               ),
-              child: Icon(
-                Icons.device_unknown,
-                size: 36,
-                color: theme.colorScheme.onErrorContainer,
+              const SizedBox(height: 20),
+              Text(
+                '$displayName is no longer available',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              '$displayName is no longer available',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.01,
-                height: 32 / 24,
-                color: theme.colorScheme.onSurface,
+              const SizedBox(height: 8),
+              Text(
+                'This trusted device was removed or is no longer in your '
+                'trusted list. Return to the home screen to continue.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'This trusted device was removed or is no longer in your trusted list. Return to the home screen to continue.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w400,
-                height: 24 / 16,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
+              const SizedBox(height: 24),
+              FilledButton.icon(
                 onPressed: () {
                   if (widget.onClose != null) {
                     widget.onClose!();
@@ -1102,165 +782,138 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     });
                   }
                 },
-                style: FilledButton.styleFrom(
-                  backgroundColor: theme.colorScheme.primaryContainer,
-                  foregroundColor: theme.colorScheme.onPrimary,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4)),
-                ),
                 icon: const Icon(Icons.arrow_back),
-                label: const Text('Back to home',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                label: const Text('Back to home'),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
+}
 
-  Widget _buildIdentityRow(
-      ThemeData theme, IconData icon, String label, String value,
-      {bool isCode = false, bool isLast = false}) {
+class _DeviceDetailSection extends StatelessWidget {
+  const _DeviceDetailSection({
+    super.key,
+    required this.title,
+    required this.icon,
+    required this.child,
+    this.accentColor,
+  });
+
+  final String title;
+  final IconData icon;
+  final Widget child;
+  final Color? accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = accentColor ?? colors.primary;
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
-        border: isLast
-            ? null
-            : Border(
-                bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.outlineVariant),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  height: 20 / 14,
-                  color: theme.colorScheme.onSurfaceVariant,
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 20, color: accent),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: colors.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: isCode
-                ? Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Flexible(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                                color: theme.colorScheme.outlineVariant),
-                          ),
-                          child: Text(
-                            value,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: TextStyle(
-                              fontFamily: 'JetBrains Mono',
-                              fontSize: 14,
-                              fontWeight: FontWeight.w400,
-                              height: 20 / 14,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      InkWell(
-                        onTap: () async {
-                          await Clipboard.setData(ClipboardData(text: value));
-                          if (!mounted) return;
-                          RiftSnackbar.show(
-                            context: context,
-                            message: 'Copied to clipboard',
-                            type: RiftSnackbarType.success,
-                          );
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(4.0),
-                          child: Icon(Icons.copy,
-                              size: 18,
-                              color: theme.colorScheme.primaryContainer),
-                        ),
-                      ),
-                    ],
-                  )
-                : Text(value,
-                    textAlign: TextAlign.right,
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w400,
-                      height: 24 / 16,
-                      color: theme.colorScheme.onSurface,
-                    )),
-          ),
+          const SizedBox(height: 16),
+          child,
         ],
       ),
     );
   }
+}
 
-  Widget _buildCapabilityToggle(ThemeData theme, IconData icon, String title,
-      String subtitle, bool enabled) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-      ),
+class _MobileDetailRow extends StatelessWidget {
+  const _MobileDetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.monospace = false,
+    this.onCopy,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool monospace;
+  final VoidCallback? onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 11),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: theme.colorScheme.primaryContainer),
-          const SizedBox(width: 16),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(icon, size: 19, color: colors.onSurfaceVariant),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 16,
+                  label,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: colors.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
-                    height: 24 / 16,
-                    color: theme.colorScheme.onSurface,
                   ),
                 ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w400,
-                    height: 20 / 14,
-                    color: theme.colorScheme.onSurfaceVariant,
+                const SizedBox(height: 3),
+                SelectableText(
+                  value,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: colors.onSurface,
+                    fontFamily: monospace ? 'JetBrains Mono' : null,
                   ),
                 ),
               ],
             ),
           ),
-          Switch(
-            value: enabled,
-            onChanged: (val) {},
-            activeThumbColor: theme.colorScheme.onPrimary,
-            activeTrackColor: theme.colorScheme.primaryContainer,
-          ),
+          if (onCopy != null) ...[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Copy $label',
+              visualDensity: VisualDensity.compact,
+              onPressed: onCopy,
+              icon: const Icon(Icons.copy, size: 18),
+              color: colors.primary,
+            ),
+          ],
         ],
       ),
     );

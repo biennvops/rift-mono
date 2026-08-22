@@ -326,7 +326,9 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       presentation.statusLabel!,
       if (presentation.powerLabel case final powerLabel?) powerLabel,
       if (presentation.mediaStateLabel case final mediaState?) mediaState,
-      if (widget.protocolVersion.isNotEmpty) 'Rift ${widget.protocolVersion}',
+      if (widget.protocolVersion.isNotEmpty &&
+          widget.protocolVersion != 'Unavailable')
+        'Rift ${widget.protocolVersion}',
       if (!widget.isSelf &&
           widget.lastSeenAt.isNotEmpty &&
           widget.lastSeenAt != 'Unavailable')
