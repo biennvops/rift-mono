@@ -271,8 +271,159 @@ void main() {
 
     expect(find.text('Windows Laptop'), findsOneWidget);
     expect(find.text('Local Device'), findsOneWidget);
-    expect(find.text('This Device'), findsNWidgets(2));
+    expect(find.text('This Device'), findsOneWidget);
     expect(find.text('Devices Hub'), findsOneWidget);
+  });
+
+  testWidgets('local device card stays neutral and omits repeated roles',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final artwork = await tester.runAsync(
+      () => _solidArtwork(const Color(0xFFD62828)),
+    );
+    final client = FakeJsonRpcRiftClient()
+      ..deviceInfo = {
+        'deviceId': 'rift-local-neutral',
+        'displayName': 'Local Phone',
+        'platform': 'android',
+      }
+      ..mediaPlaybacks = [
+        {
+          'sourceDeviceId': 'rift-local-neutral',
+          'playbackId': 'local-card-session',
+          'appName': 'Player',
+          'title': 'Local Track',
+          'playbackState': 'playing',
+          'artwork': artwork,
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+
+    final card = find.byKey(const ValueKey('local-device-card'));
+    final cardInkWell = tester.widget<InkWell>(card);
+    final platformIcon = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const ValueKey('local-device-platform-icon')),
+        matching: find.byType(Icon),
+      ),
+    );
+    final theme = Theme.of(tester.element(card));
+
+    expect(cardInkWell.child, isA<Padding>());
+    expect(platformIcon.color, theme.colorScheme.primary);
+    expect(find.byIcon(Icons.verified), findsNothing);
+    expect(
+      find.descendant(of: card, matching: find.text('This Device')),
+      findsNothing,
+    );
+    expect(find.text('This Device'), findsOneWidget);
+    expect(find.text('Playing'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('trusted card has one presence indicator',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-single-presence',
+          'displayName': 'One Status Phone',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['presence.basic'],
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(
+      const ValueKey('trusted-peer-card-rift-single-presence'),
+    );
+    final platformIcon = find.byKey(
+      const ValueKey('trusted-peer-platform-icon-rift-single-presence'),
+    );
+    final circularIndicators = find.descendant(
+      of: card,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Container &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration! as BoxDecoration).shape == BoxShape.circle,
+      ),
+    );
+
+    expect(
+      find.descendant(of: card, matching: find.text('Online')),
+      findsOneWidget,
+    );
+    expect(circularIndicators, findsOneWidget);
+    expect(
+      find.descendant(of: platformIcon, matching: find.byType(Stack)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('mobile trusted card opens real feature actions',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-mobile-actions',
+          'displayName': 'Action Phone',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': [
+            'clipboard.offer_fetch',
+            'file.transfer',
+          ],
+        },
+      ];
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const MaterialApp(home: TrustedDevicesScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('trusted-peer-card-rift-mobile-actions')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-detail-mobile')), findsOneWidget);
+    expect(find.text('Open Clipboard'), findsOneWidget);
+    expect(find.text('Send File'), findsOneWidget);
+    expect(find.text('Transfers'), findsOneWidget);
   });
 
   testWidgets('trusted peer uses discovery name when trust record has none',
@@ -330,7 +481,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('local-device-card')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Device details'), findsOneWidget);
+    expect(find.text('Identity'), findsOneWidget);
     expect(find.text('Linux Desktop 111'), findsWidgets);
     expect(find.text('rift-abcdefghijklmnopqrstuvwxyz234567'), findsOneWidget);
     expect(
@@ -688,7 +839,7 @@ void main() {
     );
     expect(
       find.descendant(of: nearbyFocus, matching: find.text('Nearby')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.descendant(of: nearbyFocus, matching: find.text('Ready to pair')),

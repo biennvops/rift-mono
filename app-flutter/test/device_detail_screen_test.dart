@@ -354,6 +354,284 @@ void main() {
     expect(find.text('AC power'), findsOneWidget);
   });
 
+  testWidgets('mobile trusted detail shows real device content and actions',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-mobile-peer',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'osVersion': 'Android 16',
+          'protocolVersion': '0.1-draft',
+          'fingerprint': 'ABCD-EFGH-IJKL-MNOP',
+          'pairedAt': '2026-07-28T12:00:00Z',
+          'lastSeenAt': '2026-07-29T00:00:00Z',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': [
+            'clipboard.offer_fetch',
+            'device.status',
+            'file.transfer',
+            'media.playback',
+            'presence.basic',
+          ],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-mobile-peer',
+            'batteryPercent': 82,
+            'chargingState': 'charging',
+            'powerSource': 'usb',
+            'lowPowerMode': false,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+    final media = MediaPlaybackPresentation.fromRecord(
+      {
+        'playbackId': 'mobile-session',
+        'sourceDeviceId': 'rift-mobile-peer',
+        'appName': 'Rift Music',
+        'title': 'Northern Lights',
+        'artist': 'Signal Bloom',
+        'album': 'Continuity',
+        'playbackState': 'playing',
+        'positionMs': 31000,
+        'durationMs': 181000,
+      },
+      artworkBytes: base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      ),
+      artworkIdentity: 'mobile-artwork',
+      accentColor: const Color(0xFFD62828),
+    );
+    var clipboardCount = 0;
+    var sendCount = 0;
+    var transfersCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: DeviceDetailScreen(
+            peer: client.trustedPeers.first,
+            isOnline: true,
+            mediaPlayback: media,
+            onOpenClipboardActivity: () => clipboardCount++,
+            onSendFile: () => sendCount++,
+            onViewTransferActivity: () => transfersCount++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-detail-mobile')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
+    expect(find.text('Pixel 9'), findsOneWidget);
+    expect(find.text('ANDROID'), findsWidgets);
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('82%'), findsOneWidget);
+    expect(find.text('Charging'), findsOneWidget);
+    expect(find.text('Northern Lights'), findsOneWidget);
+    expect(find.text('Signal Bloom'), findsOneWidget);
+    expect(find.text('Continuity'), findsOneWidget);
+    expect(find.text('Playing'), findsWidgets);
+    expect(find.text('Rift Music'), findsOneWidget);
+    expect(find.text('0:31'), findsOneWidget);
+    expect(find.text('3:01'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('device-focus-media-artwork-mobile-artwork'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Clipboard sync'), findsOneWidget);
+    expect(find.text('File transfer'), findsOneWidget);
+    expect(find.text('Media playback'), findsOneWidget);
+    expect(find.text('Open Clipboard'), findsOneWidget);
+    expect(find.text('Send File'), findsOneWidget);
+    expect(find.text('Transfers'), findsOneWidget);
+    expect(find.text('Security'), findsOneWidget);
+    expect(find.text('Trusted'), findsOneWidget);
+    expect(find.text('Identity'), findsOneWidget);
+    expect(find.text('ABCD-EFGH-IJKL-MNOP'), findsOneWidget);
+    expect(find.byIcon(Icons.smartphone), findsWidgets);
+
+    expect(find.byType(Switch), findsNothing);
+    expect(find.text('Clipboard Sync'), findsNothing);
+    expect(find.text('Authorized Trusted Peer'), findsNothing);
+    expect(find.text('Actions'), findsNothing);
+    expect(find.text('Device Name'), findsNothing);
+    expect(find.text('Copy Device ID'), findsNothing);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-open-clipboard')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-open-clipboard')),
+    );
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-send-file')),
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-send-file')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-view-transfers')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-view-transfers')),
+    );
+
+    expect(clipboardCount, 1);
+    expect(sendCount, 1);
+    expect(transfersCount, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile detail only shows feature actions with callbacks',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-no-mobile-actions',
+          'displayName': 'Basic Peer',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': [
+            'clipboard.offer_fetch',
+            'file.transfer',
+            'future.capability',
+          ],
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Clipboard sync'), findsOneWidget);
+    expect(find.text('File transfer'), findsOneWidget);
+    expect(find.text('future.capability'), findsOneWidget);
+    expect(find.text('Available'), findsNWidgets(3));
+    expect(find.text('Open Clipboard'), findsNothing);
+    expect(find.text('Send File'), findsNothing);
+    expect(find.text('Transfers'), findsNothing);
+  });
+
+  testWidgets('mobile local detail shows live content without peer roles',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-local-mac',
+          'displayName': 'MacBook Pro',
+          'platform': 'macos',
+          'osVersion': 'macOS 16',
+          'protocolVersion': '0.1-draft',
+          'fingerprint': '1234-5678-90AB-CDEF',
+          'capabilities': [
+            {'name': 'device.status', 'version': 1},
+            {'name': 'media.playback', 'version': 1},
+          ],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-local-mac',
+            'batteryPercent': 82,
+            'chargingState': 'charging',
+            'powerSource': 'ac',
+            'lowPowerMode': false,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+    final media = MediaPlaybackPresentation.fromRecord({
+      'playbackId': 'local-session',
+      'sourceDeviceId': 'rift-local-mac',
+      'appName': 'Music',
+      'title': 'Home Signal',
+      'artist': 'Local Artist',
+      'playbackState': 'paused',
+    });
+
+    await tester.pumpWidget(
+      buildTestApp(client, isSelf: true, mediaPlayback: media),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('MacBook Pro'), findsOneWidget);
+    expect(find.text('MACOS'), findsWidgets);
+    expect(find.text('Power status'), findsOneWidget);
+    expect(find.text('82%'), findsOneWidget);
+    expect(find.text('Media'), findsOneWidget);
+    expect(find.text('Home Signal'), findsOneWidget);
+    expect(find.text('Local Artist'), findsOneWidget);
+    expect(find.text('Paused'), findsWidgets);
+    expect(find.text('Features'), findsOneWidget);
+    expect(find.text('Device status'), findsOneWidget);
+    expect(find.text('Media playback'), findsOneWidget);
+    expect(find.text('Identity'), findsOneWidget);
+    expect(find.byIcon(Icons.laptop_mac), findsWidgets);
+
+    expect(find.text('Online'), findsNothing);
+    expect(find.text('This Device'), findsNothing);
+    expect(find.text('Local host device'), findsNothing);
+    expect(find.text('Security'), findsNothing);
+    expect(find.text('Revoke Trust'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile detail never fabricates a missing protocol version',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-no-version',
+          'displayName': 'Versionless Peer',
+          'platform': 'android',
+          'osVersion': 'Android 16',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': <String>[],
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(find.text('v2.4.0'), findsNothing);
+    expect(find.text('Rift Client / Protocol Version'), findsOneWidget);
+    expect(find.text('Unavailable'), findsWidgets);
+  });
+
+  testWidgets('mobile detail uses each canonical platform icon',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+    for (final entry in const [
+      ('android', Icons.smartphone),
+      ('macos', Icons.laptop_mac),
+      ('linux', Icons.computer),
+    ]) {
+      client.trustedPeers = [
+        {
+          'deviceId': 'rift-${entry.$1}',
+          'displayName': '${entry.$1} peer',
+          'platform': entry.$1,
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': <String>[],
+        },
+      ];
+
+      await tester.pumpWidget(buildTestApp(client));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(entry.$2), findsWidgets, reason: entry.$1);
+      expect(tester.takeException(), isNull, reason: entry.$1);
+    }
+  });
+
   testWidgets('embedded trusted peer uses the desktop focus presentation',
       (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 700));
