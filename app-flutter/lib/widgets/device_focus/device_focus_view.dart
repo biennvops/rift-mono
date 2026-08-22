@@ -8,6 +8,7 @@ import '../animated_accent.dart';
 import '../device_hub/device_platform_presentation.dart';
 import '../device_hub/orbit_peer_presentation.dart';
 import 'device_core.dart';
+import 'device_detail_content.dart';
 import 'device_focus_background.dart';
 import 'device_focus_connector_painter.dart';
 import 'device_focus_layout.dart';
@@ -650,344 +651,32 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       };
 
   Widget _buildMediaPanel() {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final media = _liveMediaPlayback;
-    final hasPosition = media?.positionMs != null &&
-        media?.durationMs != null &&
-        media!.durationMs! > 0;
-    final progress = hasPosition
-        ? (media.positionMs! / media.durationMs!).clamp(0.0, 1.0)
-        : null;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildMediaArtworkSlot(),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    media?.displayTitle ?? 'Nothing playing',
-                    key: const ValueKey('device-focus-media-title'),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      color: colors.onSurface,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (media != null && media.artist.isNotEmpty) ...[
-                    const SizedBox(height: 5),
-                    Text(
-                      media.artist,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colors.onSurface,
-                      ),
-                    ),
-                  ],
-                  if (media != null && media.album.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      media.album,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  Text(
-                    media?.stateLabel ?? 'Nothing playing',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: colors.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        if (hasPosition) ...[
-          const SizedBox(height: 18),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                _formatPlaybackTime(media.positionMs!),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: colors.onSurfaceVariant,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-              Text(
-                _formatPlaybackTime(media.durationMs!),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: colors.onSurfaceVariant,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          LinearProgressIndicator(
-            key: const ValueKey('device-focus-media-progress'),
-            value: progress,
-            minHeight: 4,
-            borderRadius: BorderRadius.circular(999),
-          ),
-        ],
-        if (media != null && media.application.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Icon(
-                Icons.apps_outlined,
-                size: 16,
-                color: colors.onSurfaceVariant,
-              ),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  media.application,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildMediaArtworkSlot() {
-    final theme = Theme.of(context);
-    final media = _liveMediaPlayback;
-    final bytes = media?.artworkBytes;
-    final identity = media?.artworkIdentity;
-    final artwork = bytes == null || identity == null
-        ? Container(
-            key: const ValueKey('device-focus-media-artwork-placeholder'),
-            width: 104,
-            height: 104,
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-            ),
-            child: Icon(
-              Icons.graphic_eq,
-              size: 38,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          )
-        : ClipRRect(
-            key: ValueKey('device-focus-media-artwork-$identity'),
-            borderRadius: BorderRadius.circular(12),
-            child: Image.memory(
-              bytes,
-              width: 104,
-              height: 104,
-              fit: BoxFit.cover,
-              filterQuality: FilterQuality.medium,
-              errorBuilder: (context, error, stackTrace) => Container(
-                width: 104,
-                height: 104,
-                color: theme.colorScheme.surfaceContainerHighest,
-                child: Icon(
-                  Icons.graphic_eq,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          );
-    return SizedBox.square(
-      dimension: 104,
-      child: AnimatedSwitcher(
-        duration: RiftMotion.durationOf(context, RiftMotion.normal),
-        switchInCurve: RiftMotion.enter,
-        switchOutCurve: RiftMotion.exit,
-        child: artwork,
-      ),
-    );
-  }
-
-  String _formatPlaybackTime(int milliseconds) {
-    final totalSeconds = milliseconds.clamp(0, 1 << 31) ~/ 1000;
-    final minutes = totalSeconds ~/ 60;
-    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
+    return DeviceMediaDetailsView(media: _liveMediaPlayback);
   }
 
   List<DeviceFocusPanelRow> _powerRows(Map<String, dynamic> status) {
-    final isStale = _isPowerStatusStale(status);
-    final rows = <DeviceFocusPanelRow>[];
-    final batteryPresent = status['batteryPresent'];
-    final batteryPercent = status['batteryPercent'];
-    if (batteryPresent == false) {
-      rows.add(
-          const DeviceFocusPanelRow(label: 'Battery', value: 'No battery'));
-    } else if (batteryPercent is num) {
-      rows.add(
-        DeviceFocusPanelRow(
-          label: 'Battery',
-          value: '${batteryPercent.toInt()}%',
-        ),
-      );
-    }
-    final chargingState = status['chargingState']?.toString();
-    if (chargingState != null) {
-      rows.add(
-        DeviceFocusPanelRow(
-          label: 'Charging state',
-          value: _formatChargingState(chargingState),
-        ),
-      );
-    }
-    final powerSource = status['powerSource']?.toString();
-    if (powerSource != null) {
-      rows.add(
-        DeviceFocusPanelRow(
-          label: 'Power source',
-          value: _formatPowerSource(powerSource),
-        ),
-      );
-    }
-    if (status['lowPowerMode'] is bool) {
-      rows.add(
-        DeviceFocusPanelRow(
-          label: 'Low Power Mode',
-          value: status['lowPowerMode'] == true ? 'On' : 'Off',
-        ),
-      );
-    }
-    final observedAt = _formatTimestamp(status['observedAt']?.toString());
-    rows.add(
-      DeviceFocusPanelRow(
-        label: 'Status',
-        value: isStale ? 'Stale · $observedAt' : observedAt,
-      ),
+    final details = DevicePowerDetails.fromStatus(
+      status,
+      isOnline: widget.isOnline,
     );
-    return rows;
+    return details.rows
+        .map(
+          (row) => DeviceFocusPanelRow(
+            label: row.label,
+            value: row.value,
+          ),
+        )
+        .toList(growable: false);
   }
 
   Widget _buildFeaturesPanel() {
-    final capabilities = widget.capabilities;
-    if (capabilities.isEmpty) {
-      return Text(
-        'No negotiated features reported.',
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (var index = 0; index < capabilities.length; index++) ...[
-          _buildFeatureRow(capabilities[index]),
-          if (index != capabilities.length - 1)
-            Divider(
-              height: 20,
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-        ],
-      ],
+    return DeviceFeaturesView(
+      capabilities: widget.capabilities,
+      onOpenClipboardActivity: widget.onOpenClipboardActivity,
+      onSendFile: widget.onSendFile,
+      onViewTransferActivity: widget.onViewTransferActivity,
     );
   }
-
-  Widget _buildFeatureRow(String capability) {
-    final theme = Theme.of(context);
-    final actions = _featureActions(capability);
-    return Container(
-      key: ValueKey('device-focus-feature-$capability'),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                _featureIcon(capability),
-                size: 20,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _formatCapability(capability),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurface,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              Text(
-                'Available',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          if (actions.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(spacing: 8, runSpacing: 8, children: actions),
-          ],
-        ],
-      ),
-    );
-  }
-
-  List<Widget> _featureActions(String capability) => switch (capability) {
-        'clipboard.offer_fetch' => [
-            FilledButton.icon(
-              key: const ValueKey('device-focus-open-clipboard'),
-              onPressed: widget.onOpenClipboardActivity,
-              icon: const Icon(Icons.open_in_new, size: 18),
-              label: const Text('Open Clipboard'),
-            ),
-          ],
-        'file.transfer' => [
-            FilledButton.icon(
-              key: const ValueKey('device-focus-send-file'),
-              onPressed: widget.onSendFile,
-              icon: const Icon(Icons.upload_file, size: 18),
-              label: const Text('Send File'),
-            ),
-            OutlinedButton.icon(
-              key: const ValueKey('device-focus-view-transfers'),
-              onPressed: widget.onViewTransferActivity,
-              icon: const Icon(Icons.swap_horiz, size: 18),
-              label: const Text('Transfers'),
-            ),
-          ],
-        _ => const [],
-      };
-
-  IconData _featureIcon(String capability) => switch (capability) {
-        'clipboard.offer_fetch' => Icons.content_paste_outlined,
-        'device.status' => Icons.monitor_heart_outlined,
-        'file.transfer' => Icons.folder_outlined,
-        'media.playback' => Icons.graphic_eq,
-        'notification.sync' => Icons.notifications_outlined,
-        _ => Icons.extension_outlined,
-      };
 
   Widget? _panelFooter(DeviceFocusNodeKind kind) {
     final colors = Theme.of(context).colorScheme;
@@ -1008,56 +697,12 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     );
   }
 
-  bool _isPowerStatusStale(Map<String, dynamic> status) =>
-      status['isStale'] == true || !widget.isOnline;
-
   String _powerSummary(Map<String, dynamic> status) {
-    final livePower = widget.presentation.powerLabel;
-    if (livePower != null) return livePower;
-    if (_isPowerStatusStale(status)) return 'Status stale';
-    if (status['batteryPresent'] == false) return 'No battery';
-    return 'Status';
+    return DevicePowerDetails.fromStatus(
+      status,
+      isOnline: widget.isOnline,
+    ).summary(widget.presentation.powerLabel);
   }
-
-  String _formatChargingState(String value) => switch (value) {
-        'charging' => 'Charging',
-        'discharging' => 'Discharging',
-        'full' => 'Full',
-        'notCharging' => 'Not charging',
-        _ => 'Unknown',
-      };
-
-  String _formatPowerSource(String value) => switch (value) {
-        'ac' => 'AC power',
-        'usb' => 'USB power',
-        'battery' => 'Battery',
-        _ => 'Unknown',
-      };
-
-  String _formatTimestamp(String? raw) {
-    if (raw == null || raw.isEmpty) return 'Unavailable';
-    final parsed = DateTime.tryParse(raw)?.toLocal();
-    if (parsed == null) return raw;
-    final yyyy = parsed.year.toString().padLeft(4, '0');
-    final mm = parsed.month.toString().padLeft(2, '0');
-    final dd = parsed.day.toString().padLeft(2, '0');
-    final hh = parsed.hour.toString().padLeft(2, '0');
-    final min = parsed.minute.toString().padLeft(2, '0');
-    final sec = parsed.second.toString().padLeft(2, '0');
-    return '$yyyy-$mm-$dd $hh:$min:$sec';
-  }
-
-  String _formatCapability(String capability) => switch (capability) {
-        'clipboard.offer_fetch' => 'Clipboard sync',
-        'device.status' => 'Device status',
-        'file.transfer' => 'File transfer',
-        'media.playback' => 'Media playback',
-        'notification.sync' => 'Notification sync',
-        'operation.lifecycle' => 'Operations',
-        'presence.basic' => 'Presence',
-        'security.event_log' => 'Security event log',
-        _ => capability,
-      };
 }
 
 class _DeviceFocusNodeData {
