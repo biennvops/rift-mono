@@ -344,10 +344,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final osVersion = _diagnosticValue(peer['osVersion']);
     final pairedAt = formatDeviceTimestamp(peer['pairedAt']?.toString());
     final lastSeenAt = formatDeviceTimestamp(peer['lastSeenAt']?.toString());
-    final capabilities = (peer['capabilities'] as List?)
-            ?.map((capability) => capability.toString())
-            .toList(growable: false) ??
-        const <String>[];
+    final capabilities = deviceCapabilityNames(peer['capabilities']);
 
     if (_wasRemoved) {
       return Scaffold(

@@ -94,6 +94,24 @@ class DevicePowerDetails {
   }
 }
 
+List<String> deviceCapabilityNames(Object? value) {
+  if (value is! List) return const [];
+
+  final names = <String>[];
+  for (final capability in value) {
+    final name = _deviceCapabilityName(capability);
+    if (name != null) names.add(name);
+  }
+  return names;
+}
+
+String? _deviceCapabilityName(Object? capability) {
+  final value = capability is Map
+      ? capability['name']?.toString().trim() ?? ''
+      : capability?.toString().trim() ?? '';
+  return value.isEmpty ? null : value;
+}
+
 @immutable
 class DeviceFeaturePresentation {
   const DeviceFeaturePresentation({

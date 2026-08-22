@@ -532,7 +532,10 @@ void main() {
           'osVersion': 'macOS 16',
           'protocolVersion': '0.1-draft',
           'fingerprint': '1234-5678-90AB-CDEF',
-          'capabilities': ['device.status', 'media.playback'],
+          'capabilities': [
+            {'name': 'device.status', 'version': 1},
+            {'name': 'media.playback', 'version': 1},
+          ],
           'deviceStatus': {
             'sourceDeviceId': 'rift-local-mac',
             'batteryPercent': 82,
