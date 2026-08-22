@@ -17,6 +17,8 @@ import '../widgets/bubble_background.dart';
 import '../widgets/device_hub/device_hub_view.dart';
 import '../widgets/device_hub/device_orbit_motion_state.dart';
 import '../widgets/device_hub/device_orbit_scene.dart';
+import '../widgets/device_hub/device_platform_presentation.dart';
+import '../widgets/device_hub/device_summary_status.dart';
 import '../widgets/device_hub/nearby_peer_focus.dart';
 import '../widgets/device_hub/orbit_peer_presentation.dart';
 import '../src/ui/theme.dart';
@@ -1042,157 +1044,101 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       return const SizedBox.shrink();
     }
 
-    final deviceId = localDeviceInfo['deviceId']?.toString() ?? '';
-    final displayName = localDeviceInfo['displayName']?.toString();
-    final platform =
-        localDeviceInfo['platform']?.toString() ?? _localPlatform();
-    final titleText = (displayName != null && displayName.isNotEmpty)
-        ? displayName
-        : (deviceId.isNotEmpty ? deviceId : 'This Device');
-
+    final presentation = _localPresentationFor(localDeviceInfo);
+    final deviceId = presentation.deviceId;
+    final accent = presentation.accentColor ?? theme.colorScheme.primary;
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
     final selfId = deviceId.isNotEmpty ? deviceId : 'self';
     final isSelected = isDesktop &&
         (_selectedDeviceId == 'self' || _selectedDeviceId == selfId);
+    void handleTap() {
+      unawaited(_showLocalDeviceDetails(localDeviceInfo));
+    }
 
-    return Material(
-      color: isSelected
-          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
-          : Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(
-          color: isSelected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.outlineVariant,
-          width: isSelected ? 1.5 : 1,
+    return Semantics(
+      button: true,
+      label: presentation.semanticDescription(),
+      onTap: handleTap,
+      excludeSemantics: true,
+      child: Material(
+        color: isSelected
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
+            : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(
+            color: isSelected ? accent : theme.colorScheme.outlineVariant,
+            width: isSelected ? 1.5 : 1,
+          ),
         ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        key: const ValueKey('local-device-card'),
-        onTap: () => _showLocalDeviceDetails(localDeviceInfo),
-        child: Stack(
-          children: [
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: 4,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(8)),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: const ValueKey('local-device-card'),
+          onTap: handleTap,
+          child: Stack(
+            children: [
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 4,
+                child: ColoredBox(color: accent),
+              ),
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        devicePlatformIcon(presentation.platform),
+                        size: 20,
+                        color: accent,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  presentation.displayName,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    color: theme.colorScheme.onSurface,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(Icons.verified, size: 18, color: accent),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          DeviceSummaryStatus(
+                            presentation: presentation,
+                            accentColor: accent,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primaryContainer
-                                .withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Stack(
-                            alignment: Alignment.center,
-                            clipBehavior: Clip.none,
-                            children: [
-                              Icon(_platformIcon(platform),
-                                  size: 20, color: theme.colorScheme.primary),
-                              Positioned(
-                                top: -4,
-                                right: -4,
-                                child: Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF10B981),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color: Colors.white, width: 2),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      titleText,
-                                      style:
-                                          theme.textTheme.titleMedium?.copyWith(
-                                        color: theme.colorScheme.onSurface,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Icon(Icons.verified,
-                                      size: 18,
-                                      color: theme.colorScheme.primary),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 2),
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.fingerprint,
-                                        size: 14,
-                                        color: theme
-                                            .colorScheme.onSurfaceVariant
-                                            .withValues(alpha: 0.7)),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(
-                                        _localDeviceId != null
-                                            ? (_localDeviceId!.length > 20
-                                                ? '${_localDeviceId!.substring(0, 20)}...'
-                                                : _localDeviceId!)
-                                            : 'Loading fingerprint...',
-                                        style: theme.textTheme.labelSmall
-                                            ?.copyWith(
-                                                fontFamily: 'monospace',
-                                                color: theme.colorScheme
-                                                    .onSurfaceVariant
-                                                    .withValues(alpha: 0.7)),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1218,6 +1164,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                 peer: deviceInfo,
                 isOnline: true,
                 isSelf: true,
+                mediaPlayback: _mediaPlaybackForDevice(selfDeviceId),
                 onClose: () => Navigator.of(dialogContext).pop(),
               ),
             ),
@@ -1235,6 +1182,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           peer: deviceInfo,
           isOnline: true,
           isSelf: true,
+          mediaPlayback: _mediaPlaybackForDevice(selfDeviceId),
         ),
       ),
     );
@@ -1245,37 +1193,203 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       Map<String, dynamic> peer, bool isTrusted, ThemeData theme) {
     if (peer['trustState'] == 'blocked') return const SizedBox.shrink();
 
-    final isOnline = peer['presence'] == 'online';
     final trustState = peer['trustState']?.toString() ?? 'trusted';
-
-    final String deviceIdStr = peer['deviceId']?.toString() ?? '';
-    final String rawDisplayName = peer['displayName']?.toString() ?? '';
-    final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
-    final String shortId =
-        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = rawDisplayName.isNotEmpty
-        ? rawDisplayName
-        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
-    final String statusText = trustState == 'pairing_pending'
-        ? 'PENDING'
-        : (isOnline ? 'ONLINE' : 'OFFLINE');
-
-    final bool isPending = trustState == 'pairing_pending';
-
+    final presentation = _trustedPresentationFor(peer);
+    final deviceId = presentation.deviceId;
+    final titleText = presentation.displayName;
+    final isPending = trustState == 'pairing_pending';
+    final accent = presentation.accentColor ?? theme.colorScheme.primary;
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
     final isSelected =
-        isDesktop && deviceIdStr.isNotEmpty && _selectedDeviceId == deviceIdStr;
-
-    return InkWell(
-      key: ValueKey('trusted-peer-card-$deviceIdStr'),
-      onTap: () => _handlePeerAction(
+        isDesktop && deviceId.isNotEmpty && _selectedDeviceId == deviceId;
+    void handleTap() {
+      unawaited(
+        _handlePeerAction(
           peer: peer,
           isTrusted: isTrusted,
           trustState: trustState,
-          titleText: titleText),
-      borderRadius: BorderRadius.circular(8),
-      child: AnimatedContainer(
-        duration: RiftMotion.durationOf(context, RiftMotion.normal),
+          titleText: titleText,
+        ),
+      );
+    }
+
+    return Semantics(
+      button: true,
+      label: isPending
+          ? '$titleText, pairing pending'
+          : presentation.semanticDescription(),
+      onTap: handleTap,
+      excludeSemantics: !isPending,
+      child: InkWell(
+        key: ValueKey('trusted-peer-card-$deviceId'),
+        onTap: handleTap,
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: RiftMotion.durationOf(context, RiftMotion.normal),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
+                : Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isSelected ? accent : theme.colorScheme.outlineVariant,
+              width: isSelected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      devicePlatformIcon(presentation.platform),
+                      size: 20,
+                      color: presentation.isOnline
+                          ? accent
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    Positioned(
+                      top: -4,
+                      right: -4,
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: presentation.isOnline
+                              ? accent
+                              : theme.colorScheme.outlineVariant,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      titleText,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 3),
+                    if (isPending)
+                      Text(
+                        'PENDING',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.tertiary,
+                        ),
+                      )
+                    else
+                      DeviceSummaryStatus(
+                        presentation: presentation,
+                        accentColor: accent,
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (isPending)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.tertiaryContainer
+                            .withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.hourglass_empty,
+                            size: 14,
+                            color: theme.colorScheme.tertiary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'PENDING',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.tertiary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    TextButton(
+                      onPressed: () => _handlePeerAction(
+                        peer: peer,
+                        isTrusted: true,
+                        trustState: trustState,
+                        titleText: titleText,
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                        foregroundColor: theme.colorScheme.tertiary,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      child: const Text('Cancel'),
+                    ),
+                  ],
+                )
+              else
+                Icon(
+                  Icons.chevron_right,
+                  size: 20,
+                  color: isSelected
+                      ? accent
+                      : theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.4),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDiscoveredCardHtml(Map<String, dynamic> peer, ThemeData theme) {
+    final presentation = _nearbyPresentationFor(peer);
+    final deviceId = presentation.deviceId;
+    final titleText = presentation.displayName;
+    final accent = theme.colorScheme.primary;
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final isSelected =
+        isDesktop && deviceId.isNotEmpty && _selectedDeviceId == deviceId;
+
+    return Semantics(
+      container: true,
+      label: presentation.semanticDescription(),
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected
@@ -1283,9 +1397,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               : Colors.white,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isSelected
-                ? theme.colorScheme.primary
-                : theme.colorScheme.outlineVariant,
+            color: isSelected ? accent : theme.colorScheme.outlineVariant,
             width: isSelected ? 1.5 : 1,
           ),
         ),
@@ -1296,32 +1408,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color:
-                    theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
+                color: accent.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Stack(
-                alignment: Alignment.center,
-                clipBehavior: Clip.none,
-                children: [
-                  Icon(_platformIcon(peerPlatform),
-                      size: 20, color: theme.colorScheme.primary),
-                  Positioned(
-                    top: -4,
-                    right: -4,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: isOnline
-                            ? const Color(0xFF10B981)
-                            : theme.colorScheme.outlineVariant,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                    ),
-                  ),
-                ],
+              child: Icon(
+                devicePlatformIcon(presentation.platform),
+                size: 20,
+                color: accent,
               ),
             ),
             const SizedBox(width: 10),
@@ -1339,167 +1432,43 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    statusText,
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  const SizedBox(height: 3),
+                  DeviceSummaryStatus(
+                    presentation: presentation,
+                    accentColor: accent,
                   ),
                 ],
               ),
             ),
             const SizedBox(width: 8),
-            if (isPending)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.tertiaryContainer
-                          .withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.hourglass_empty,
-                            size: 14, color: theme.colorScheme.tertiary),
-                        const SizedBox(width: 4),
-                        Text('PENDING',
-                            style: theme.textTheme.labelSmall
-                                ?.copyWith(color: theme.colorScheme.tertiary)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  TextButton(
-                    onPressed: () => _handlePeerAction(
-                      peer: peer,
-                      isTrusted: true,
-                      trustState: trustState,
-                      titleText: titleText,
-                    ),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      minimumSize: const Size(0, 28),
-                      foregroundColor: theme.colorScheme.tertiary,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(4)),
-                    ),
-                    child: const Text('Cancel'),
-                  ),
-                ],
-              )
-            else
-              Icon(
-                Icons.chevron_right,
-                size: 20,
-                color: isSelected
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+            FilledButton.icon(
+              onPressed: () => _handlePeerAction(
+                peer: peer,
+                isTrusted: false,
+                trustState: 'discovered',
+                titleText: titleText,
               ),
+              icon: const Icon(Icons.link, size: 16),
+              label: const Text('Pair'),
+              style: FilledButton.styleFrom(
+                backgroundColor: theme.colorScheme.primaryContainer,
+                foregroundColor: theme.colorScheme.onPrimaryContainer,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                minimumSize: const Size(0, 36),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildDiscoveredCardHtml(Map<String, dynamic> peer, ThemeData theme) {
-    final String deviceIdStr = peer['deviceId']?.toString() ?? '';
-    final String rawDisplayName = peer['displayName']?.toString() ?? '';
-    final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
-    final String shortId =
-        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = rawDisplayName.isNotEmpty
-        ? rawDisplayName
-        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
-    final isDesktop = MediaQuery.of(context).size.width >= 1024;
-    final isSelected =
-        isDesktop && deviceIdStr.isNotEmpty && _selectedDeviceId == deviceIdStr;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isSelected
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
-            : Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isSelected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.outlineVariant,
-          width: isSelected ? 1.5 : 1,
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(_platformIcon(peerPlatform),
-                size: 20, color: theme.colorScheme.primary),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(titleText,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: theme.colorScheme.onSurface),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text('Local Network',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: () => _handlePeerAction(
-              peer: peer,
-              isTrusted: false,
-              trustState: 'discovered',
-              titleText: titleText,
-            ),
-            icon: const Icon(Icons.link, size: 16),
-            label: const Text('Pair'),
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.primaryContainer,
-              foregroundColor: theme.colorScheme.onPrimaryContainer,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              minimumSize: const Size(0, 36),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildRestrictedCardHtml(Map<String, dynamic> peer, ThemeData theme) {
-    final String deviceIdStr = peer['deviceId']?.toString() ?? '';
-    final String rawDisplayName = peer['displayName']?.toString() ?? '';
-    final String shortId =
-        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = rawDisplayName.isNotEmpty
-        ? rawDisplayName
-        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
+    final titleText = resolveDeviceDisplayName(peer);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1592,16 +1561,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   DeviceDetailScreen _buildTrustedPeerDetail({
     required Map<String, dynamic> peer,
-    required bool isOnline,
     required VoidCallback? onClose,
   }) {
-    final deviceId = peer['deviceId']?.toString() ?? '';
-    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final presentation = _trustedPresentationFor(peer);
+    final deviceId = presentation.deviceId;
+    final displayName = presentation.displayName;
+    final deviceStatus = _deviceStatusFor(peer);
+    final enrichedPeer = deviceStatus == null
+        ? peer
+        : <String, dynamic>{...peer, 'deviceStatus': deviceStatus};
     final canOpenActivity = onClose != null && deviceId.isNotEmpty;
     return DeviceDetailScreen(
       key: ValueKey(deviceId.isNotEmpty ? deviceId : displayName),
-      peer: peer,
-      isOnline: isOnline,
+      peer: enrichedPeer,
+      isOnline: presentation.isOnline,
       mediaPlayback: _mediaPlaybackForDevice(deviceId),
       onClose: onClose,
       onOpenClipboardActivity: canOpenActivity
@@ -1910,7 +1883,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         }
         return;
       } else {
-        final isOnline = peer['presence'] == 'online';
         final isDesktop = MediaQuery.of(context).size.width >= 1024;
         final targetId = deviceId ?? titleText;
 
@@ -1928,10 +1900,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         final detailResult =
             await Navigator.of(context).push<Map<String, dynamic>>(
           MaterialPageRoute<Map<String, dynamic>>(
-            builder: (_) => DeviceDetailScreen(
-              key: ValueKey(targetId),
+            builder: (_) => _buildTrustedPeerDetail(
               peer: peer,
-              isOnline: isOnline,
+              onClose: null,
             ),
           ),
         );
@@ -1957,22 +1928,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         message: JsonRpcRiftClient.formatDisplayError(e),
         type: RiftSnackbarType.error,
       );
-    }
-  }
-
-  IconData _platformIcon(String? platform) {
-    switch (platform?.toLowerCase()) {
-      case 'android':
-      case 'ios':
-        return Icons.smartphone;
-      case 'windows':
-        return Icons.desktop_windows;
-      case 'macos':
-        return Icons.laptop_mac;
-      case 'linux':
-        return Icons.computer;
-      default:
-        return Icons.devices;
     }
   }
 
@@ -2193,56 +2148,39 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     return peers;
   }
 
-  String _displayNameFor(Map<String, dynamic> peer) {
-    final displayName = peer['displayName']?.toString().trim() ?? '';
-    if (displayName.isNotEmpty) return displayName;
+  Map<String, dynamic>? _deviceStatusFor(Map<String, dynamic> peer) {
     final deviceId = peer['deviceId']?.toString() ?? '';
-    if (deviceId.isEmpty) return 'Unknown Device';
-    return deviceId.length > 18 ? '${deviceId.substring(0, 18)}…' : deviceId;
+    final embeddedStatus = peer['deviceStatus'];
+    return _peerDeviceStatuses[deviceId] ??
+        (embeddedStatus is Map
+            ? Map<String, dynamic>.from(embeddedStatus)
+            : null);
   }
 
-  OrbitPeerPresentation _orbitPresentationFor(
-    Map<String, dynamic> peer, {
-    bool includeMedia = false,
-    OrbitPeerStatusKind? statusKind,
-  }) {
+  OrbitPeerPresentation _trustedPresentationFor(
+    Map<String, dynamic> peer,
+  ) {
     final deviceId = peer['deviceId']?.toString() ?? '';
-    final media = includeMedia ? _mediaPlaybackForDevice(deviceId) : null;
-    final resolvedStatusKind = statusKind ??
-        (peer['presence']?.toString() == 'online'
-            ? OrbitPeerStatusKind.trustedOnline
-            : OrbitPeerStatusKind.trustedOffline);
-    final status = _peerDeviceStatuses[deviceId] ??
-        (peer['deviceStatus'] is Map
-            ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
-            : null);
-    final batteryPercent = status?['batteryPercent'];
-    final powerStatus =
-        resolvedStatusKind == OrbitPeerStatusKind.trustedOnline &&
-                status?['isStale'] != true &&
-                status?['batteryPresent'] != false &&
-                batteryPercent is num
-            ? OrbitPeerPowerStatus(
-                batteryPercent: batteryPercent.toInt().clamp(0, 100).toInt(),
-                isCharging: status?['chargingState']?.toString() == 'charging',
-              )
-            : null;
-    return OrbitPeerPresentation(
-      deviceId: deviceId,
-      displayName: _displayNameFor(peer),
-      platform: peer['platform']?.toString() ?? 'unknown',
-      statusKind: resolvedStatusKind,
-      accentColor: media?.accentColor,
-      powerStatus: powerStatus,
-      activity: switch (media?.playbackState) {
-        null => OrbitPeerActivity.none,
-        'playing' => OrbitPeerActivity.mediaPlaying,
-        'buffering' => OrbitPeerActivity.mediaBuffering,
-        _ => OrbitPeerActivity.mediaPaused,
-      },
-      mediaTitle: media?.displayTitle,
-      mediaArtist:
-          media != null && media.artist.isNotEmpty ? media.artist : null,
+    return buildTrustedDevicePresentation(
+      peer: peer,
+      deviceStatus: _deviceStatusFor(peer),
+      mediaPlayback: _mediaPlaybackForDevice(deviceId),
+    );
+  }
+
+  OrbitPeerPresentation _nearbyPresentationFor(
+    Map<String, dynamic> peer,
+  ) {
+    return buildNearbyDevicePresentation(peer);
+  }
+
+  OrbitPeerPresentation _localPresentationFor(
+    Map<String, dynamic> device,
+  ) {
+    final deviceId = device['deviceId']?.toString() ?? '';
+    return buildLocalDevicePresentation(
+      device: device,
+      mediaPlayback: _mediaPlaybackForDevice(deviceId),
     );
   }
 
@@ -2259,18 +2197,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   Widget _buildTrustedDesktopScene() {
     final peers = _trustedOrbitPeers;
+    final localDevice = _localDeviceInfo;
+    final localPresentation =
+        localDevice == null ? null : _localPresentationFor(localDevice);
     final selectedPeer = _peerWithId(peers, _selectedDeviceId);
     final handoff = _pairingHandoff;
     final pairingOrbitHandoff = handoff?.animating == true
         ? PairingOrbitHandoff(
             deviceId: handoff!.deviceId,
             previousPeers: handoff.previousTrustedPeers
-                .map(
-                  (peer) => _orbitPresentationFor(
-                    peer,
-                    includeMedia: true,
-                  ),
-                )
+                .map(_trustedPresentationFor)
                 .toList(growable: false),
             sourceOrigin: handoff.sourceOrigin,
             duration: _pairingHandoffDuration,
@@ -2297,13 +2233,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                         : 'pairing-handoff-orbit',
                   ),
                   localDisplayName:
-                      _localDeviceInfo?['displayName']?.toString() ??
-                          'This Device',
-                  localPlatform: _localDeviceInfo?['platform']?.toString() ??
-                      _localPlatform(),
+                      localPresentation?.displayName ?? 'This Device',
+                  localPlatform:
+                      localPresentation?.platform ?? _localPlatform(),
                   peers: peers
-                      .map((peer) =>
-                          _orbitPresentationFor(peer, includeMedia: true))
+                      .map(_trustedPresentationFor)
                       .toList(growable: false),
                   phase: _orbitController,
                   scanProgress: _pulseController,
@@ -2344,8 +2278,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     autofocus: true,
                     child: _buildTrustedPeerDetail(
                       peer: selectedPeer,
-                      isOnline:
-                          selectedPeer['presence']?.toString() == 'online',
                       onClose: () {
                         _closePeerFocus();
                         unawaited(_loadData());
@@ -2358,7 +2290,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   Widget _buildDesktopPairingScene(Map<String, dynamic> target) {
     final deviceId = target['deviceId']?.toString();
-    final displayName = _displayNameFor(target);
+    final displayName = resolveDeviceDisplayName(target);
     final address = target['address']?.toString();
     final port = (target['port'] as num?)?.toInt();
     final targetKey = deviceId ?? '$address:$port';
@@ -2389,6 +2321,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   Widget _buildNearbyDesktopScene() {
     final peers = _nearbyOrbitPeers;
+    final localDevice = _localDeviceInfo;
+    final localPresentation =
+        localDevice == null ? null : _localPresentationFor(localDevice);
     final selectedPeer = _peerWithId(peers, _selectedNearbyDeviceId);
     final pairingTarget = _desktopPairingTarget;
     final waitingForHandoff =
@@ -2414,18 +2349,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                             : 'nearby-orbit-overview',
                       ),
                       localDisplayName:
-                          _localDeviceInfo?['displayName']?.toString() ??
-                              'This Device',
+                          localPresentation?.displayName ?? 'This Device',
                       localPlatform:
-                          _localDeviceInfo?['platform']?.toString() ??
-                              _localPlatform(),
+                          localPresentation?.platform ?? _localPlatform(),
                       peers: peers
-                          .map(
-                            (peer) => _orbitPresentationFor(
-                              peer,
-                              statusKind: OrbitPeerStatusKind.nearby,
-                            ),
-                          )
+                          .map(_nearbyPresentationFor)
                           .toList(growable: false),
                       phase: _orbitController,
                       scanProgress: _pulseController,
@@ -2476,10 +2404,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                       child: Focus(
                         autofocus: true,
                         child: NearbyPeerFocus(
-                          deviceId: selectedPeer['deviceId']?.toString() ?? '',
-                          displayName: _displayNameFor(selectedPeer),
-                          platform:
-                              selectedPeer['platform']?.toString() ?? 'unknown',
+                          presentation: _nearbyPresentationFor(selectedPeer),
                           endpoint: _endpointFor(selectedPeer),
                           onClose: _closePeerFocus,
                           onPair: () => unawaited(
@@ -2487,7 +2412,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                               peer: selectedPeer,
                               isTrusted: false,
                               trustState: 'discovered',
-                              titleText: _displayNameFor(selectedPeer),
+                              titleText: resolveDeviceDisplayName(selectedPeer),
                             ),
                           ),
                         ),
@@ -2634,7 +2559,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                           for (final peer in pending)
                             ListTile(
                               leading: const Icon(Icons.hourglass_empty),
-                              title: Text(_displayNameFor(peer)),
+                              title: Text(resolveDeviceDisplayName(peer)),
                               subtitle: const Text('Pairing pending'),
                               trailing: TextButton(
                                 onPressed: () {
@@ -2644,7 +2569,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                                       peer: peer,
                                       isTrusted: true,
                                       trustState: 'pairing_pending',
-                                      titleText: _displayNameFor(peer),
+                                      titleText: resolveDeviceDisplayName(peer),
                                     ),
                                   );
                                 },
@@ -2661,7 +2586,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                             ListTile(
                               leading: Icon(Icons.block,
                                   color: theme.colorScheme.error),
-                              title: Text(_displayNameFor(peer)),
+                              title: Text(resolveDeviceDisplayName(peer)),
                               subtitle: const Text('Blocked'),
                               trailing: TextButton(
                                 onPressed: () {
@@ -2671,7 +2596,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                                       peer: peer,
                                       isTrusted: true,
                                       trustState: 'blocked',
-                                      titleText: _displayNameFor(peer),
+                                      titleText: resolveDeviceDisplayName(peer),
                                     ),
                                   );
                                 },

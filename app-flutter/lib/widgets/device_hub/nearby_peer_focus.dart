@@ -1,19 +1,19 @@
 import 'package:flutter/material.dart';
 
+import 'device_platform_presentation.dart';
+import 'device_summary_status.dart';
+import 'orbit_peer_presentation.dart';
+
 class NearbyPeerFocus extends StatelessWidget {
   const NearbyPeerFocus({
     super.key,
-    required this.deviceId,
-    required this.displayName,
-    required this.platform,
+    required this.presentation,
     required this.endpoint,
     required this.onClose,
     required this.onPair,
   });
 
-  final String deviceId;
-  final String displayName;
-  final String platform;
+  final OrbitPeerPresentation presentation;
   final String? endpoint;
   final VoidCallback onClose;
   final VoidCallback onPair;
@@ -22,18 +22,12 @@ class NearbyPeerFocus extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final normalizedPlatform = platform.trim().toLowerCase();
-    final showPlatform = const {
-      'android',
-      'ios',
-      'windows',
-      'macos',
-      'linux',
-    }.contains(normalizedPlatform);
+    final platformLabel = devicePlatformLabel(presentation.platform);
     return Semantics(
-      label: '$displayName, nearby device, ready to pair',
+      container: true,
+      label: presentation.semanticDescription(),
       child: Stack(
-        key: ValueKey('nearby-peer-focus-$deviceId'),
+        key: ValueKey('nearby-peer-focus-${presentation.deviceId}'),
         fit: StackFit.expand,
         children: [
           DecoratedBox(
@@ -82,29 +76,44 @@ class NearbyPeerFocus extends StatelessWidget {
                         ],
                       ),
                       child: Icon(
-                        _platformIcon(platform),
+                        devicePlatformIcon(presentation.platform),
                         size: 46,
                         color: colors.primary,
                       ),
                     ),
                     const SizedBox(height: 20),
                     Text(
-                      displayName,
+                      presentation.displayName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                       style: theme.textTheme.headlineSmall?.copyWith(
                         color: colors.onSurface,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    if (showPlatform) ...[
+                    if (platformLabel != null) ...[
                       const SizedBox(height: 6),
                       Text(
-                        normalizedPlatform.toUpperCase(),
+                        platformLabel,
                         style: theme.textTheme.labelMedium?.copyWith(
                           color: colors.onSurfaceVariant,
                         ),
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    DeviceSummaryStatus(
+                      presentation: presentation,
+                      accentColor: colors.primary,
+                      alignment: WrapAlignment.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Ready to pair',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     Text(
                       'Device ID',
@@ -115,7 +124,7 @@ class NearbyPeerFocus extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     SelectableText(
-                      deviceId,
+                      presentation.deviceId,
                       key: const ValueKey('nearby-focus-device-id'),
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -150,12 +159,4 @@ class NearbyPeerFocus extends StatelessWidget {
       ),
     );
   }
-
-  IconData _platformIcon(String value) => switch (value.toLowerCase()) {
-        'android' || 'ios' => Icons.smartphone,
-        'windows' => Icons.desktop_windows,
-        'macos' => Icons.laptop_mac,
-        'linux' => Icons.computer,
-        _ => Icons.devices,
-      };
 }

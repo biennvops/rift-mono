@@ -4,6 +4,7 @@ import '../../src/ui/motion.dart';
 import 'device_orbit_background.dart';
 import 'device_orbit_layout.dart';
 import 'device_orbit_peer.dart';
+import 'device_platform_presentation.dart';
 import 'orbit_peer_layout_state.dart';
 import 'orbit_peer_presentation.dart';
 
@@ -683,7 +684,7 @@ class _LocalDeviceCore extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    _platformIcon(platform),
+                    devicePlatformIcon(platform),
                     size: compact ? 20 : (size < 145 ? 30 : 38),
                     color: colors.primary,
                   ),
@@ -719,12 +720,4 @@ class _LocalDeviceCore extends StatelessWidget {
       ),
     );
   }
-
-  IconData _platformIcon(String value) => switch (value.toLowerCase()) {
-        'android' || 'ios' => Icons.smartphone,
-        'windows' => Icons.desktop_windows,
-        'macos' => Icons.laptop_mac,
-        'linux' => Icons.computer,
-        _ => Icons.devices,
-      };
 }

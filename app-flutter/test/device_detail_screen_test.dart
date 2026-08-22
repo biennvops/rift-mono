@@ -107,6 +107,7 @@ void main() {
     FakeDeviceDetailClient client, {
     VoidCallback? onClose,
     bool isSelf = false,
+    bool isOnline = true,
     MediaPlaybackPresentation? mediaPlayback,
   }) {
     return MaterialApp(
@@ -114,7 +115,7 @@ void main() {
         value: client,
         child: DeviceDetailScreen(
           peer: client.trustedPeers.first,
-          isOnline: true,
+          isOnline: isOnline,
           isSelf: isSelf,
           mediaPlayback: mediaPlayback,
           onClose: onClose,
@@ -195,6 +196,28 @@ void main() {
     expect(find.text('Device unavailable'), findsNothing);
   });
 
+  testWidgets('DeviceDetailScreen normalizes presence after daemon refresh',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+    expect(find.text('Online'), findsOneWidget);
+
+    client.trustedPeers = [
+      {...client.trustedPeers.first, 'presence': ' ONLINE '},
+    ];
+    await client.emitTrustChanged({
+      'deviceId': 'rift-phone',
+      'previousState': 'trusted',
+      'newState': 'trusted',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('Offline'), findsNothing);
+  });
+
   testWidgets('DeviceDetailScreen renders and updates peer power status',
       (WidgetTester tester) async {
     final client = FakeDeviceDetailClient()
@@ -240,7 +263,7 @@ void main() {
     });
     await tester.pumpAndSettle();
 
-    expect(find.text('59%'), findsOneWidget);
+    expect(find.text('59%'), findsNWidgets(2));
     expect(find.text('Discharging'), findsOneWidget);
     expect(find.text('Battery'), findsWidgets);
     expect(find.text('On'), findsOneWidget);
@@ -274,6 +297,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Offline'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsOneWidget);
+  });
+
+  testWidgets('DeviceDetailScreen marks cached power stale while offline',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'offline',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPresent': true,
+            'batteryPercent': 82,
+            'observedAt': '2026-07-29T00:00:00Z',
+            'isStale': false,
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client, isOnline: false));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.text('82%'), findsOneWidget);
     expect(find.textContaining('Stale ·'), findsOneWidget);
   });
 
@@ -785,6 +836,12 @@ void main() {
       findsOneWidget,
     );
     expect(
+      find.byKey(
+        const ValueKey('device-focus-core-media-mediaPlaying'),
+      ),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(const ValueKey('device-focus-media-accented')),
       findsOneWidget,
     );
@@ -834,6 +891,12 @@ void main() {
       findsOneWidget,
     );
     expect(
+      find.byKey(
+        const ValueKey('device-focus-core-media-mediaPaused'),
+      ),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(const ValueKey('device-focus-media-accented')),
       findsOneWidget,
     );
@@ -859,6 +922,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('device-focus-media-buffering')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('device-focus-core-media-mediaBuffering'),
+      ),
       findsOneWidget,
     );
     expect(
@@ -889,6 +958,69 @@ void main() {
     );
     expect(
         find.byKey(const ValueKey('device-focus-node-media')), findsOneWidget);
+  });
+
+  testWidgets(
+      'desktop focus suppresses offline cached power and media summaries',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-offline-media',
+          'displayName': 'Offline Phone',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'offline',
+          'capabilities': ['device.status', 'media.playback'],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-offline-media',
+            'batteryPercent': 82,
+            'chargingState': 'charging',
+            'observedAt': '2026-08-01T10:00:00Z',
+            'isStale': false,
+          },
+        },
+      ];
+    final cachedPlayback = MediaPlaybackPresentation.fromRecord(
+      {
+        'playbackId': 'cached-session',
+        'sourceDeviceId': 'rift-offline-media',
+        'appName': 'Player',
+        'title': 'Cached Track',
+        'playbackState': 'playing',
+      },
+      accentColor: const Color(0xFFD62828),
+    );
+
+    await tester.pumpWidget(
+      buildTestApp(
+        client,
+        onClose: () {},
+        isOnline: false,
+        mediaPlayback: cachedPlayback,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final summary = tester.widget<Text>(
+      find.byKey(const ValueKey('device-focus-summary')),
+    );
+    expect(summary.data, contains('Offline'));
+    expect(summary.data, isNot(contains('82%')));
+    expect(summary.data, isNot(contains('Playing')));
+    expect(find.text('Status stale'), findsOneWidget);
+    expect(find.text('Nothing playing'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-media-accented')),
+      findsNothing,
+    );
+    expect(find.byType(MediaPlaybackActivityIndicator), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-power')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('82%'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsOneWidget);
   });
 
   testWidgets('desktop focus respects reduced motion accessibility settings',

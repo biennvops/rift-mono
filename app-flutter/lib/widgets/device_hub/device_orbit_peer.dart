@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../src/ui/motion.dart';
 import '../animated_accent.dart';
 import '../media_playback_activity_indicator.dart';
+import 'device_platform_presentation.dart';
+import 'device_playback_status_glyph.dart';
 import 'orbit_peer_presentation.dart';
 
 class DeviceOrbitPeer extends StatefulWidget {
@@ -69,25 +71,10 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     final peer = widget.peer;
     final highlighted = _interacting;
     final compact = widget.size < 100;
-    final status = peer.statusLabel;
+    final status = peer.orbitStatusLabel;
     final powerStatus = peer.statusKind == OrbitPeerStatusKind.trustedOnline
         ? peer.powerStatus
         : null;
-    final availabilityDescription = switch (peer.statusKind) {
-      OrbitPeerStatusKind.nearby => 'ready to pair',
-      OrbitPeerStatusKind.trustedOffline => 'offline',
-      OrbitPeerStatusKind.trustedOnline when powerStatus != null =>
-        'online, battery ${powerStatus.batteryPercent} percent${powerStatus.isCharging ? ', charging' : ''}',
-      OrbitPeerStatusKind.trustedOnline => 'online',
-    };
-    final mediaDescription = switch (peer.activity) {
-      OrbitPeerActivity.mediaPlaying =>
-        ', playing ${peer.mediaTitle ?? 'media'}${peer.mediaArtist == null ? '' : ' by ${peer.mediaArtist}'}',
-      OrbitPeerActivity.mediaPaused => ', ${peer.mediaTitle ?? 'media'} paused',
-      OrbitPeerActivity.mediaBuffering =>
-        ', buffering ${peer.mediaTitle ?? 'media'}',
-      OrbitPeerActivity.none => '',
-    };
     final mediaStateKey = switch (peer.activity) {
       OrbitPeerActivity.mediaPlaying => 'playing',
       OrbitPeerActivity.mediaPaused => 'paused',
@@ -97,8 +84,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
 
     final peerContent = Semantics(
       button: true,
-      label:
-          '${peer.displayName}, ${widget.semanticRole}, $availabilityDescription$mediaDescription',
+      label: peer.semanticDescription(role: widget.semanticRole),
       child: KeyedSubtree(
         key: mediaStateKey == null
             ? null
@@ -154,7 +140,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            _platformIcon(peer.platform),
+                            devicePlatformIcon(peer.platform),
                             size: compact ? 18 : (widget.size < 112 ? 24 : 28),
                             color: peer.isOnline
                                 ? accent
@@ -237,11 +223,13 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                                       peer.activity !=
                                           OrbitPeerActivity.none) ...[
                                     SizedBox(width: compact ? 3 : 6),
-                                    _PlaybackStatusGlyph(
-                                      deviceId: peer.deviceId,
+                                    DevicePlaybackStatusGlyph(
+                                      key: ValueKey(
+                                        'orbit-peer-status-${peer.activity.name}-${peer.deviceId}',
+                                      ),
                                       activity: peer.activity,
                                       color: accent,
-                                      compact: compact,
+                                      size: compact ? 11 : 13,
                                     ),
                                   ],
                                 ],
@@ -334,77 +322,6 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
           ),
         );
       },
-    );
-  }
-
-  IconData _platformIcon(String platform) => switch (platform.toLowerCase()) {
-        'android' || 'ios' => Icons.smartphone,
-        'windows' => Icons.desktop_windows,
-        'macos' => Icons.laptop_mac,
-        'linux' => Icons.computer,
-        _ => Icons.devices,
-      };
-}
-
-class _PlaybackStatusGlyph extends StatelessWidget {
-  const _PlaybackStatusGlyph({
-    required this.deviceId,
-    required this.activity,
-    required this.color,
-    required this.compact,
-  });
-
-  final String deviceId;
-  final OrbitPeerActivity activity;
-  final Color color;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox.square(
-      key: ValueKey('orbit-peer-status-${activity.name}-$deviceId'),
-      dimension: compact ? 11 : 13,
-      child: switch (activity) {
-        OrbitPeerActivity.mediaPlaying => Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _StatusBar(height: compact ? 5 : 6, color: color),
-              _StatusBar(height: compact ? 9 : 11, color: color),
-              _StatusBar(height: compact ? 7 : 8, color: color),
-            ],
-          ),
-        OrbitPeerActivity.mediaPaused => Icon(
-            Icons.pause,
-            size: compact ? 11 : 13,
-            color: color,
-          ),
-        OrbitPeerActivity.mediaBuffering => Icon(
-            Icons.sync,
-            size: compact ? 10 : 12,
-            color: color,
-          ),
-        OrbitPeerActivity.none => const SizedBox.shrink(),
-      },
-    );
-  }
-}
-
-class _StatusBar extends StatelessWidget {
-  const _StatusBar({required this.height, required this.color});
-
-  final double height;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 2,
-      height: height,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(1),
-      ),
     );
   }
 }

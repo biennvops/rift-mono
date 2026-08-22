@@ -271,7 +271,7 @@ void main() {
 
     expect(find.text('Windows Laptop'), findsOneWidget);
     expect(find.text('Local Device'), findsOneWidget);
-    expect(find.text('This Device'), findsOneWidget);
+    expect(find.text('This Device'), findsNWidgets(2));
     expect(find.text('Devices Hub'), findsOneWidget);
   });
 
@@ -683,6 +683,17 @@ void main() {
     expect(
         find.byKey(const ValueKey('nearby-focus-device-id')), findsOneWidget);
     expect(find.text(nearbyDeviceId), findsOneWidget);
+    final nearbyFocus = find.byKey(
+      const ValueKey('nearby-peer-focus-$nearbyDeviceId'),
+    );
+    expect(
+      find.descendant(of: nearbyFocus, matching: find.text('Nearby')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: nearbyFocus, matching: find.text('Ready to pair')),
+      findsOneWidget,
+    );
     expect(find.text('UNKNOWN'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -816,7 +827,7 @@ void main() {
         (widget) =>
             widget is Semantics &&
             widget.properties.label ==
-                'Charging Phone, trusted device, online, battery 72 percent, charging, Quiet Track paused',
+                'Charging Phone, Android, trusted device, online, battery 72 percent, charging, Quiet Track paused',
       ),
       findsOneWidget,
     );
@@ -835,6 +846,45 @@ void main() {
     expect(find.text('68%'), findsOneWidget);
     expect(find.byIcon(Icons.battery_std), findsOneWidget);
 
+    await tester.tap(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-battery-peer')),
+    );
+    await tester.pumpAndSettle();
+
+    final focusSummary = tester.widget<Text>(
+      find.byKey(const ValueKey('device-focus-summary')),
+    );
+    expect(focusSummary.data, contains('Online'));
+    expect(focusSummary.data, contains('68%'));
+    expect(focusSummary.data, contains('Paused'));
+    expect(find.text('Quiet Track'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('device-focus-close')));
+    await tester.pumpAndSettle();
+
+    await client.emitDeviceStatus({
+      'sourceDeviceId': 'rift-battery-peer',
+      'batteryPresent': true,
+      'batteryPercent': 68,
+      'chargingState': 'discharging',
+      'powerSource': 'battery',
+      'isStale': true,
+    });
+    await tester.pump();
+
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('68%'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('orbit-peer-battery-rift-battery-peer')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('orbit-peer-media-paused-rift-battery-peer'),
+      ),
+      findsOneWidget,
+    );
+
     client.trustedPeers = [
       {
         ...client.trustedPeers.first,
@@ -848,6 +898,144 @@ void main() {
     expect(find.text('68%'), findsNothing);
     expect(
       find.byKey(const ValueKey('orbit-peer-battery-rift-battery-peer')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('mobile trusted card follows canonical live-state transitions',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(360, 700));
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-fixture-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['device.status', 'media.playback'],
+        },
+      ]
+      ..discoveredPeers = const []
+      ..mediaPlaybacks = [
+        {
+          'sourceDeviceId': 'rift-fixture-phone',
+          'playbackId': 'fixture-session',
+          'appName': 'Player',
+          'title': 'Example Track',
+          'artist': 'Example Artist',
+          'playbackState': 'playing',
+          'updatedAt': '2026-08-01T10:00:00Z',
+        },
+      ];
+    client.peerDeviceStatuses['rift-fixture-phone'] = {
+      'sourceDeviceId': 'rift-fixture-phone',
+      'batteryPresent': true,
+      'batteryPercent': 82,
+      'chargingState': 'charging',
+      'isStale': false,
+    };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('82% · Charging'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('Playing'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label ==
+                'Pixel 9, Android, online, battery 82 percent, charging, playing Example Track by Example Artist',
+      ),
+      findsOneWidget,
+    );
+
+    Future<void> updatePlayback(String state, int sequence) async {
+      await client.emitMediaUpdated({
+        'sourceDeviceId': 'rift-fixture-phone',
+        'playbackId': 'fixture-session',
+        'appName': 'Player',
+        'title': 'Example Track',
+        'artist': 'Example Artist',
+        'playbackState': state,
+        'updatedAt': '2026-08-01T10:0$sequence:00Z',
+      });
+      await tester.pump();
+    }
+
+    await updatePlayback('paused', 1);
+    expect(find.text('Playing'), findsNothing);
+    expect(find.text('Paused'), findsOneWidget);
+
+    await updatePlayback('playing', 2);
+    expect(find.text('Paused'), findsNothing);
+    expect(find.text('Playing'), findsOneWidget);
+
+    await updatePlayback('buffering', 3);
+    expect(find.text('Playing'), findsNothing);
+    expect(find.text('Buffering'), findsOneWidget);
+
+    await updatePlayback('playing', 4);
+    await client.emitMediaRemoved({
+      'sourceDeviceId': 'rift-fixture-phone',
+      'playbackId': 'fixture-session',
+    });
+    await tester.pump();
+    expect(find.text('Playing'), findsNothing);
+    expect(find.text('Buffering'), findsNothing);
+
+    await client.emitMediaPosted({
+      'sourceDeviceId': 'rift-fixture-phone',
+      'playbackId': 'fixture-session',
+      'appName': 'Player',
+      'title': 'Example Track',
+      'artist': 'Example Artist',
+      'playbackState': 'playing',
+      'updatedAt': '2026-08-01T10:05:00Z',
+    });
+    await tester.pump();
+    expect(find.text('Playing'), findsOneWidget);
+
+    await client.emitDeviceStatus({
+      'sourceDeviceId': 'rift-fixture-phone',
+      'batteryPresent': true,
+      'batteryPercent': 82,
+      'chargingState': 'charging',
+      'isStale': true,
+    });
+    await tester.pump();
+
+    expect(find.text('82% · Charging'), findsNothing);
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('Playing'), findsOneWidget);
+
+    client.trustedPeers = [
+      {...client.trustedPeers.first, 'presence': 'offline'},
+    ];
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.text('82% · Charging'), findsNothing);
+    expect(find.text('Playing'), findsNothing);
+    expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'device-summary-media-mediaPlaying-rift-fixture-phone',
+        ),
+      ),
       findsNothing,
     );
   });
@@ -1174,7 +1362,7 @@ void main() {
 
     expect(find.text('Phone'), findsOneWidget);
     expect(find.text('TRUSTED'), findsNothing);
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
     expect(find.text('Pair'), findsNothing);
   });
 
@@ -1210,7 +1398,7 @@ void main() {
 
     // Verify Presence indicator
     expect(find.text('Linux Workstation'), findsOneWidget);
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
     expect(find.byIcon(Icons.computer), findsWidgets);
   });
 
@@ -1240,7 +1428,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
 
     client.trustedPeers = [
       {
@@ -1258,7 +1446,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(client.listTrustedPeersCallCount, greaterThan(callsBeforeRefresh));
-    expect(find.text('OFFLINE'), findsOneWidget);
+    expect(find.text('Offline'), findsOneWidget);
   });
 
   testWidgets(
@@ -1957,7 +2145,7 @@ void main() {
         (widget) =>
             widget is Semantics &&
             widget.properties.label ==
-                'Peer B, trusted device, online, buffering Track B',
+                'Peer B, Android, trusted device, online, buffering Track B',
       ),
       findsOneWidget,
     );
